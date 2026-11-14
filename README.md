@@ -1,4 +1,25 @@
-# ShadowKraken (ShadowMountPlus fork for PS5)
+<div align="center">
+  <img src="assets/shadowkraken-header.png" alt="Cyan and violet kraken data motif surrounding a package tile" width="100%">
+  <h1>ShadowKraken</h1>
+  <p><strong>Native plaintext debug FPKG support for ShadowMountPlus</strong></p>
+  <p>
+    <a href="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml">
+      <img src="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml/badge.svg?branch=feature%2Fkraken-fpkg" alt="PS5 build workflow">
+    </a>
+    <img src="https://img.shields.io/badge/FPKG-experimental%20%7C%20default%20on-f0a43a?style=for-the-badge" alt="FPKG experimental and enabled by default">
+    <img src="https://img.shields.io/badge/platform-PS5%20%7C%20Prospero-635bdb?style=for-the-badge" alt="PS5 Prospero platform">
+    <a href="LICENSE">
+      <img src="https://img.shields.io/badge/license-GPL--3.0-2867b2?style=for-the-badge" alt="GPL-3.0 license">
+    </a>
+  </p>
+  <p>
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#supported-game-formats">Formats</a> ·
+    <a href="#native-fpkg-support-experimental">FPKG setup</a> ·
+    <a href="#configuration">Configuration</a> ·
+    <a href="#troubleshooting">Troubleshooting</a>
+  </p>
+</div>
 
 **ShadowKraken** is a GPL-3.0 fork of
 [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus). It keeps SMP's
@@ -7,7 +28,17 @@ adds an experimental native path for supported plaintext debug FPKGs. The
 payload and console UI retain the ShadowMountPlus name; the build output is
 `shadowmountplus.elf`.
 
-**[Download PS5 build artifacts](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml)** ·
+<table>
+  <tr>
+    <td><strong>FPKG</strong><br>Experimental · enabled by default</td>
+    <td><strong>Eligible input</strong><br>Self-created, authorized plaintext debug packages</td>
+  </tr>
+  <tr>
+    <td><strong>Build</strong><br><a href="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml">Download the PS5 ELF artifact</a></td>
+    <td><strong>Console status</strong><br>Build verified · registration and launch need PS5 testing</td>
+  </tr>
+</table>
+
 **[Upstream ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)** ·
 **[Discord community](https://discord.gg/x2Ppvzwjhm)** ·
 **[Report a ShadowKraken issue](https://github.com/MNeroba/ShadowKraken/issues)**
