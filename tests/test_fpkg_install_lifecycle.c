@@ -3,6 +3,7 @@
 #include "sm_appdb.h"
 #include "sm_config_mount.h"
 #include "sm_fpkg_cache.h"
+#include "sm_fpkg.h"
 #include "sm_filesystem.h"
 #include "sm_image_cache.h"
 #include "sm_install.h"
@@ -13,7 +14,9 @@
 #include "sm_paths.h"
 #include "sm_runtime.h"
 #include "sm_shellcore_hooks.h"
+#include "sm_shellcore_service.h"
 #include "sm_title_state.h"
+#include "sm_types.h"
 #include <strings.h>
 
 #ifndef MNT_RDONLY
@@ -57,6 +60,13 @@ static bool fpkg_feature_enabled;
 static sm_fpkg_status_t generation_info_status;
 static sm_fpkg_cache_generation_info_t generation_info;
 static unsigned generation_info_calls;
+static char expected_generation_path[MAX_PATH] =
+    "/data/shadowmount/fpkg-cache/PPSA00001/generation-host-test";
+static char expected_source_path[MAX_PATH];
+static unsigned fake_fpkg_open_count;
+static unsigned fake_fpkg_close_count;
+static unsigned fake_cache_build_count;
+static bool external_mutation_active;
 
 static bool copy_sce_sys_to_appmeta(const char *src, const char *dst);
 static bool update_trophy_metadata(const char *title_id,
@@ -156,7 +166,8 @@ static bool update_trophy_metadata(const char *title_id,
 }
 bool mount_title_nullfs(const char *title_id, const char *src_path) {
   assert(strcmp(title_id, k_title) == 0);
-  assert(strcmp(src_path, k_source) == 0);
+  assert(strcmp(src_path, k_source) == 0 ||
+         strcmp(src_path, expected_generation_path) == 0);
   record_event("nullfs mount");
   return true;
 }
@@ -164,13 +175,15 @@ void runtime_mount_state_lock(void) {}
 void runtime_mount_state_unlock(void) {}
 bool rollback_title_nullfs_mount(const char *title_id, const char *src_path) {
   assert(strcmp(title_id, k_title) == 0);
-  assert(strcmp(src_path, k_source) == 0);
+  assert(strcmp(src_path, k_source) == 0 ||
+         strcmp(src_path, expected_generation_path) == 0);
   record_event("nullfs rollback");
   return true;
 }
 bool write_mount_link(const char *title_id, const char *src_path) {
   assert(strcmp(title_id, k_title) == 0);
-  assert(strcmp(src_path, k_source) == 0);
+  assert(strcmp(src_path, k_source) == 0 ||
+         strcmp(src_path, expected_generation_path) == 0);
   record_event("mount.lnk");
   if (fail_mount_link) {
     errno = EIO;
@@ -220,13 +233,82 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
     sm_fpkg_cache_generation_info_t *info_out) {
   assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
   assert(strcmp(title_id, k_title) == 0);
-  assert(strcmp(generation_path,
-                "/data/shadowmount/fpkg-cache/PPSA00001/generation-host-test")
-         == 0);
+  assert(strcmp(generation_path, expected_generation_path) == 0);
   ++generation_info_calls;
+  record_event("cache info");
   if (generation_info_status == SM_FPKG_OK)
     *info_out = generation_info;
   return generation_info_status;
+}
+bool sm_pkg_parse_fd(const char *path, int fd, sm_pkg_info_t *info_out) {
+  struct stat st;
+  assert(strcmp(path, expected_source_path) == 0);
+  assert(fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode));
+  memset(info_out, 0, sizeof(*info_out));
+  (void)strlcpy(info_out->title_id, k_title, sizeof(info_out->title_id));
+  (void)strlcpy(info_out->path, path, sizeof(info_out->path));
+  info_out->pkg_kind = PKG_KIND_BASE;
+  info_out->pkg_classification_confident = true;
+  record_event("pkg parse");
+  return true;
+}
+sm_fpkg_status_t sm_fpkg_open_fd(const char *path, int fd,
+                                 const sm_pkg_info_t *metadata,
+                                 sm_fpkg_t **fpkg_out) {
+  assert(strcmp(path, expected_source_path) == 0);
+  assert(fd >= 0 && metadata && strcmp(metadata->title_id, k_title) == 0);
+  ++fake_fpkg_open_count;
+  record_event("FPKG reader");
+  *fpkg_out = (sm_fpkg_t *)(uintptr_t)1u;
+  return SM_FPKG_OK;
+}
+void sm_fpkg_close(sm_fpkg_t *fpkg) {
+  assert(fpkg == (sm_fpkg_t *)(uintptr_t)1u);
+  ++fake_fpkg_close_count;
+}
+sm_fpkg_status_t sm_fpkg_cache_recover_title(
+    const char *cache_root, const char *title_id,
+    sm_fpkg_cache_recovery_report_t *report_out) {
+  assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
+  assert(strcmp(title_id, k_title) == 0);
+  if (report_out)
+    memset(report_out, 0, sizeof(*report_out));
+  record_event("cache recover");
+  return SM_FPKG_OK;
+}
+sm_fpkg_status_t sm_fpkg_cache_build_generation(
+    const char *cache_root, const char *source_path, int source_fd,
+    const sm_pkg_info_t *metadata, sm_fpkg_t *fpkg,
+    sm_fpkg_index_extract_fn should_extract_fn, void *extract_ctx,
+    const sm_fpkg_cache_options_t *options, char generation_path_out[MAX_PATH]) {
+  assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
+  assert(strcmp(source_path, expected_source_path) == 0);
+  assert(source_fd >= 0 && metadata && strcmp(metadata->title_id, k_title) == 0);
+  assert(fpkg == (sm_fpkg_t *)(uintptr_t)1u);
+  assert(should_extract_fn == NULL && extract_ctx == NULL);
+  assert(options && options->max_extract_bytes ==
+                          SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT);
+  assert(options->is_cancelled &&
+         !options->is_cancelled(options->cancel_ctx));
+  ++fake_cache_build_count;
+  record_event("cache build");
+  (void)strlcpy(generation_path_out, expected_generation_path, MAX_PATH);
+  return SM_FPKG_OK;
+}
+bool sm_shellcore_try_begin_external_mutation(void) {
+  assert(!external_mutation_active);
+  external_mutation_active = true;
+  record_event("mutation begin");
+  return true;
+}
+void sm_shellcore_end_external_mutation(void) {
+  assert(external_mutation_active);
+  external_mutation_active = false;
+  record_event("mutation end");
+}
+bool sm_shellcore_title_is_protected(const char *title_id) {
+  assert(strcmp(title_id, k_title) == 0);
+  return false;
 }
 void mark_register_attempted(const char *title_id) { (void)title_id; }
 void invalidate_app_db_title_cache(void) {}
@@ -244,6 +326,7 @@ bool mount_sandbox_directory_at(const char *title_id, const char *app0_path,
   assert(strcmp(title_id, k_title) == 0);
   assert(strcmp(app0_path, "/mnt/sandbox/PPSA00001_000/app0") == 0);
   ++sandbox_calls;
+  record_event("sandbox mount");
   (void)strlcpy(sandbox_target, target_suffix, sizeof(sandbox_target));
   (void)strlcpy(sandbox_source, source_path, sizeof(sandbox_source));
   (void)strlcpy(sandbox_label, label, sizeof(sandbox_label));
@@ -416,11 +499,98 @@ static void test_fpkg_source_parent_resolution(void) {
   assert(rmdir(parent) == 0);
 }
 
+static void test_candidate_to_registered_launch_flow(void) {
+  char parent_template[] = "/private/tmp/sm-fpkg-flow.XXXXXX";
+  if (access("/private/tmp", W_OK) != 0)
+    (void)strlcpy(parent_template, "/tmp/sm-fpkg-flow.XXXXXX",
+                  sizeof(parent_template));
+  char *parent = mkdtemp(parent_template);
+  assert(parent != NULL);
+  int length = snprintf(expected_source_path, sizeof(expected_source_path),
+                        "%s/source.pkg", parent);
+  assert(length > 0 && (size_t)length < sizeof(expected_source_path));
+  int source_fd = open(expected_source_path,
+                       O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  assert(source_fd >= 0);
+  assert(write(source_fd, "synthetic", 9u) == 9);
+  assert(close(source_fd) == 0);
+
+  length = snprintf(expected_generation_path, sizeof(expected_generation_path),
+                    "%s/cache/PPSA00001/generation-flow", parent);
+  assert(length > 0 && (size_t)length < sizeof(expected_generation_path));
+  generation_info = (sm_fpkg_cache_generation_info_t){0};
+  (void)strlcpy(generation_info.source_path, expected_source_path,
+                sizeof(generation_info.source_path));
+  generation_info.source_matches_snapshot = true;
+  generation_info_status = SM_FPKG_OK;
+  fpkg_feature_enabled = true;
+  generation_info_calls = 0;
+  fake_fpkg_open_count = 0;
+  fake_fpkg_close_count = 0;
+  fake_cache_build_count = 0;
+  reset_events();
+
+  scan_candidate_t candidate = {0};
+  (void)strlcpy(candidate.path, expected_source_path, sizeof(candidate.path));
+  (void)strlcpy(candidate.title_id, k_title, sizeof(candidate.title_id));
+  (void)strlcpy(candidate.title_name, "Synthetic debug FPKG",
+                sizeof(candidate.title_name));
+  candidate.fpkg = true;
+  char previous_generation[MAX_PATH];
+  assert(prepare_fpkg_candidate(&candidate, previous_generation));
+  assert(!candidate.fpkg &&
+         strcmp(candidate.path, expected_generation_path) == 0);
+  assert(previous_generation[0] == '\0' && !external_mutation_active);
+  assert(fake_fpkg_open_count == 1 && fake_fpkg_close_count == 1 &&
+         fake_cache_build_count == 1 && generation_info_calls == 1);
+  assert(event_count == 7);
+  assert(strcmp(events[0], "mutation begin") == 0);
+  assert(strcmp(events[1], "pkg parse") == 0);
+  assert(strcmp(events[2], "FPKG reader") == 0);
+  assert(strcmp(events[3], "cache recover") == 0);
+  assert(strcmp(events[4], "cache build") == 0);
+  assert(strcmp(events[5], "cache info") == 0);
+  assert(strcmp(events[6], "mutation end") == 0);
+
+  reset_events();
+  bridge_enabled = false;
+  api_result = 0;
+  assert(mount_and_install(candidate.path, k_title, candidate.title_name,
+                           false, true, false, NULL));
+  assert(event_count == 3 && api_calls == 1);
+  assert(strcmp(events[0], "nullfs mount") == 0);
+  assert(strcmp(events[1], "mount.lnk") == 0);
+  assert(strcmp(events[2], "AppInstallTitleDir") == 0);
+
+  reset_events();
+  generation_info_calls = 0;
+  char source_directory[MAX_PATH];
+  assert(resolve_fpkg_source_directory(k_title, candidate.path,
+                                       source_directory));
+  assert(strcmp(source_directory, parent) == 0 && generation_info_calls == 1);
+  memset(&g_fakelib_mount, 0, sizeof(g_fakelib_mount));
+  (void)strlcpy(g_fakelib_mount.title_id, k_title,
+                sizeof(g_fakelib_mount.title_id));
+  (void)strlcpy(g_fakelib_mount.sandbox_app0_path,
+                "/mnt/sandbox/PPSA00001_000/app0",
+                sizeof(g_fakelib_mount.sandbox_app0_path));
+  (void)strlcpy(g_fakelib_mount.fpkg_source_directory, source_directory,
+                sizeof(g_fakelib_mount.fpkg_source_directory));
+  assert(mount_fpkg_source_if_needed());
+  assert(sandbox_calls == 3 && strcmp(sandbox_source, parent) == 0);
+  assert(strcmp(events[0], "cache info") == 0);
+  assert(strcmp(events[1], "sandbox mount") == 0);
+
+  assert(unlink(expected_source_path) == 0);
+  assert(rmdir(parent) == 0);
+}
+
 int main(void) {
   test_title_dir_registration_routes();
   test_install_publication_and_registration_order();
   test_fpkg_sandbox_mount_route();
   test_fpkg_source_parent_resolution();
-  puts("FPKG lifecycle routing: opt-in source resolution, registration, rollback, layer reuse, and read-only sandbox target passed");
+  test_candidate_to_registered_launch_flow();
+  puts("FPKG candidate-to-launch routing: source preparation, registration, rollback, layer reuse, and read-only sandbox target passed");
   return 0;
 }

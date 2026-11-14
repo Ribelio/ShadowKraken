@@ -124,16 +124,19 @@ clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
 ```
 
 The FPKG install lifecycle smoke check compiles the production SMP functions
-for TitleDir registration, title publication, and the `/app0/kraken` sandbox
-layer. It verifies nullfs → `mount.lnk` → registration ordering, rollback when
-link publication fails, the batch registration route, bridge/API result
-preservation, the opt-in gate and source-parent resolution, reuse/creation of
-the launch-time FPKG layer, and the read-only FPKG sandbox mount:
+for FPKG candidate preparation, TitleDir registration, title publication, and
+the `/app0/kraken` sandbox layer. It verifies candidate transition to a cache
+generation, nullfs → `mount.lnk` → registration ordering, rollback when link
+publication fails, the batch registration route, bridge/API result preservation,
+the opt-in gate and source-parent resolution, reuse/creation of the launch-time
+FPKG layer, and the read-only FPKG sandbox mount:
 
 ```sh
 python3 tools/test_fpkg_install_lifecycle.py
 ```
 
-Platform calls are stubbed; this is host evidence for SMP routing and rollback,
-not proof that the PS5 nullfs, AppInstallTitleDir, loader, or launch behavior
-works on-console.
+The candidate flow uses a temporary placeholder package and stubs the PKG
+parser, FPKG reader/cache APIs, and platform calls. The separate cache-build
+fixture exercises the real C reader and cache with a synthetic plaintext FPKG.
+Together these provide host evidence for SMP routing and rollback, not proof
+that PS5 nullfs, AppInstallTitleDir, AMPR loading, or game launch works on-console.
