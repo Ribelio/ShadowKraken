@@ -468,6 +468,19 @@ static void test_title_dir_registration_routes(void) {
   fail_bridge = false;
 }
 
+static void test_install_path_component_bounds(void) {
+  char path[MAX_PATH];
+  assert(append_install_path_component(path, "/user/app", "PPSA00001_000"));
+  assert(strcmp(path, "/user/app/PPSA00001_000") == 0);
+
+  char oversized_base[MAX_PATH];
+  memset(oversized_base, 'x', sizeof(oversized_base));
+  oversized_base[sizeof(oversized_base) - 1u] = '\0';
+  memset(path, 'y', sizeof(path));
+  assert(!append_install_path_component(path, oversized_base, "sce_sys"));
+  assert(path[0] == 'y');
+}
+
 static void test_install_publication_and_registration_order(void) {
   reset_events();
   bridge_enabled = false;
@@ -725,6 +738,7 @@ static void test_candidate_to_registered_launch_flow(void) {
 
 int main(void) {
   test_title_dir_registration_routes();
+  test_install_path_component_bounds();
   test_install_publication_and_registration_order();
   test_fpkg_sandbox_mount_route();
   test_fpkg_source_parent_resolution();

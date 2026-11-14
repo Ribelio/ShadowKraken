@@ -43,6 +43,7 @@ bool wait_for_stability_fast(const char *path, const char *name);
         "is_native_fpkg_path"])
     install = functions(root, "src/sm_install.c", [
         "fpkg_cache_build_cancelled", "prepare_fpkg_candidate",
+        "append_install_path_component",
         "sm_install_register_title_dir", "mount_and_install"])
     fakelib = functions(root, "src/sm_fakelib.c", [
         "resolve_fpkg_source_directory", "mount_fpkg_source_directory",

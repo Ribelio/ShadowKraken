@@ -411,6 +411,28 @@ void sm_install_release_replaced_fpkg_generation(
 }
 
 // --- Install/Remount Action ---
+static bool append_install_path_component(char out[MAX_PATH],
+                                          const char *base,
+                                          const char *component) {
+  if (!out || !base || !component)
+    return false;
+  size_t base_len = strnlen(base, MAX_PATH);
+  size_t component_len = strnlen(component, MAX_PATH);
+  if (base_len == MAX_PATH || component_len == MAX_PATH)
+    return false;
+  bool add_separator = base_len > 0 && base[base_len - 1] != '/';
+  size_t separator_len = add_separator ? 1u : 0u;
+  if (base_len > MAX_PATH - 1u - separator_len ||
+      component_len > MAX_PATH - 1u - base_len - separator_len)
+    return false;
+
+  memcpy(out, base, base_len);
+  if (add_separator)
+    out[base_len] = '/';
+  memcpy(out + base_len + separator_len, component, component_len + 1u);
+  return true;
+}
+
 static bool mount_and_install(const char *src_path, const char *title_id,
                               const char *title_name, bool is_remount,
                               bool should_register,
@@ -419,6 +441,10 @@ static bool mount_and_install(const char *src_path, const char *title_id,
   char user_appmeta_dir[MAX_PATH];
   char user_app_dir[MAX_PATH];
   char user_sce_sys[MAX_PATH];
+  char icon_src[MAX_PATH];
+  char icon_dst[MAX_PATH];
+  char lnk_path[MAX_PATH];
+  char img_lnk_path[MAX_PATH];
   char src_sce_sys[MAX_PATH];
   char src_snd0[MAX_PATH];
   char image_source_chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
@@ -430,9 +456,18 @@ static bool mount_and_install(const char *src_path, const char *title_id,
   bool restage_appmeta = false;
   bool has_src_snd0 = false;
 
-  snprintf(user_appmeta_dir, sizeof(user_appmeta_dir), "%s/%s", APPMETA_BASE,
-           title_id);
-  snprintf(user_app_dir, sizeof(user_app_dir), "%s/%s", APP_BASE, title_id);
+  if (!append_install_path_component(user_appmeta_dir, APPMETA_BASE,
+                                     title_id) ||
+      !append_install_path_component(user_app_dir, APP_BASE, title_id) ||
+      !append_install_path_component(user_sce_sys, user_app_dir, "sce_sys") ||
+      !append_install_path_component(icon_src, user_sce_sys, "icon0.png") ||
+      !append_install_path_component(icon_dst, user_app_dir, "icon0.png") ||
+      !append_install_path_component(lnk_path, user_app_dir, "mount.lnk") ||
+      !append_install_path_component(img_lnk_path, user_app_dir,
+                                     "mount_img.lnk")) {
+    log_debug("  [LINK] title path is too long: %s", title_id);
+    return false;
+  }
 
   if (is_under_image_mount_base(src_path)) {
     image_source_count = resolve_image_source_chain_from_mount_cache(
@@ -466,7 +501,6 @@ static bool mount_and_install(const char *src_path, const char *title_id,
   if (restage_staging) {
     mkdir(APP_BASE, 0777);
     mkdir(user_app_dir, 0777);
-    snprintf(user_sce_sys, sizeof(user_sce_sys), "%s/sce_sys", user_app_dir);
     mkdir(user_sce_sys, 0777);
     if (copy_sce_sys_dir(src_sce_sys, user_sce_sys) != 0) {
       log_debug("  [COPY] Failed to copy sce_sys staging: %s -> %s", src_sce_sys,
@@ -474,10 +508,6 @@ static bool mount_and_install(const char *src_path, const char *title_id,
       return false;
     }
 
-    char icon_src[MAX_PATH];
-    char icon_dst[MAX_PATH];
-    snprintf(icon_src, sizeof(icon_src), "%s/icon0.png", user_sce_sys);
-    snprintf(icon_dst, sizeof(icon_dst), "%s/icon0.png", user_app_dir);
     if (copy_file(icon_src, icon_dst) != 0) {
       log_debug("  [COPY] Failed to copy staged icon: %s -> %s", icon_src,
                 icon_dst);
@@ -509,7 +539,6 @@ static bool mount_and_install(const char *src_path, const char *title_id,
   }
 
   // WRITE TRACKER
-  char lnk_path[MAX_PATH];
   runtime_mount_state_lock();
   if (runtime_sleep_mode_active()) {
     (void)rollback_title_nullfs_mount(title_id, src_path);
@@ -519,7 +548,6 @@ static bool mount_and_install(const char *src_path, const char *title_id,
 
   mkdir(APP_BASE, 0777);
   mkdir(user_app_dir, 0777);
-  snprintf(lnk_path, sizeof(lnk_path), "%s/mount.lnk", user_app_dir);
   if (!write_mount_link(title_id, src_path)) {
     log_debug("  [LINK] write failed for %s: %s", lnk_path, strerror(errno));
     (void)rollback_title_nullfs_mount(title_id, src_path);
@@ -529,9 +557,6 @@ static bool mount_and_install(const char *src_path, const char *title_id,
 
   log_debug("  [LINK] mount.lnk created: %s -> %s", lnk_path, src_path);
 
-  char img_lnk_path[MAX_PATH];
-  snprintf(img_lnk_path, sizeof(img_lnk_path), "%s/mount_img.lnk",
-           user_app_dir);
   if (has_image_source) {
     if (!write_mount_image_chain(title_id, image_source_chain,
                                  image_source_count)) {
