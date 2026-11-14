@@ -229,6 +229,30 @@ int main(void) {
   assert(memcmp(payload, "hello native!", sizeof(payload)) == 0);
   assert(sm_fpkg_read_file(fpkg, 0, 12, payload, 2) == SM_FPKG_CORRUPT);
   sm_fpkg_close(fpkg);
+  valid_envelope(&pkg);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x10u, 1);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x18u, 0x1000u);
+  uint8_t *cnt_row = pkg.bytes + CNT_OFFSET + 0x1000u;
+  set_be32(cnt_row, 0x1200u);
+  set_be32(cnt_row + 16u, 0x1800u);
+  set_be32(cnt_row + 20u, 14u);
+  memcpy(pkg.bytes + CNT_OFFSET + 0x1800u, "CNT icon data!", 14u);
+  assert(sm_fpkg_open_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                             &pkg, &info, &fpkg) == SM_FPKG_OK);
+  assert(sm_fpkg_file_count(fpkg) == 3);
+  size_t icon_index = SIZE_MAX;
+  for (size_t i = 0; i < sm_fpkg_file_count(fpkg); ++i) {
+    assert(sm_fpkg_file_at(fpkg, i, &file));
+    if (strcmp(file.path, "sce_sys/icon0.png") == 0)
+      icon_index = i;
+  }
+  assert(icon_index != SIZE_MAX);
+  uint8_t icon[14];
+  assert(sm_fpkg_read_file(fpkg, icon_index, 0, icon, sizeof(icon)) ==
+         SM_FPKG_OK);
+  assert(memcmp(icon, "CNT icon data!", sizeof(icon)) == 0);
+  sm_fpkg_close(fpkg);
+  valid_envelope(&pkg);
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_OK);
 

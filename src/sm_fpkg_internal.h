@@ -29,7 +29,9 @@ typedef struct {
   char *path;
   uint64_t size;
   uint64_t logical_offset;
+  uint64_t package_offset;
   bool is_dir;
+  bool from_package;
 } sm_fpkg_tree_entry_t;
 
 typedef struct {

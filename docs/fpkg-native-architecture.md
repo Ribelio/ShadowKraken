@@ -148,7 +148,8 @@ Planned implementation areas, gated in order:
    is checked against the declared `pfs_image.dat` size. The reader decodes the
    inner image on demand and validates its superblock, inode table and bounded
    directory tree into a bounded in-memory entry list. Its opaque public handle
-   enumerates validated paths and supports range reads from files. It does not
+   enumerates validated paths and supports range reads from files, including the
+   three reference CNT fallbacks (`icon0.png`, `icon0.dds`, and `param.json`). It does not
    yet extract files or produce the normalized AMPR file index. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors

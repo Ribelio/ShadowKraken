@@ -289,6 +289,98 @@ static bool reference_sets_overlap(const uint32_t *a, uint64_t a_count,
   return false;
 }
 
+static const char *cnt_fallback_path(uint32_t id) {
+  switch (id) {
+    case 0x1200u: return "sce_sys/icon0.png";
+    case 0x1280u: return "sce_sys/icon0.dds";
+    case 0x2000u: return "sce_sys/param.json";
+    default: return NULL;
+  }
+}
+
+static sm_fpkg_tree_entry_t *find_tree_path(sm_fpkg_tree_t *tree,
+                                             const char *path) {
+  for (size_t i = 0; i < tree->count; ++i) {
+    if (strcmp(tree->entries[i].path, path) == 0)
+      return &tree->entries[i];
+  }
+  return NULL;
+}
+
+static sm_fpkg_status_t append_tree_path(sm_fpkg_tree_t *tree,
+                                          const char *path, uint64_t size,
+                                          uint64_t package_offset,
+                                          bool is_dir, bool from_package) {
+  if (tree->count >= 1000000u ||
+      tree->count == SIZE_MAX / sizeof(*tree->entries))
+    return SM_FPKG_UNSUPPORTED;
+  void *grown = realloc(tree->entries,
+                        (tree->count + 1u) * sizeof(*tree->entries));
+  if (!grown)
+    return SM_FPKG_NOMEM;
+  tree->entries = grown;
+  char *copy = strdup(path);
+  if (!copy)
+    return SM_FPKG_NOMEM;
+  tree->entries[tree->count++] = (sm_fpkg_tree_entry_t){
+      .path = copy,
+      .size = size,
+      .package_offset = package_offset,
+      .is_dir = is_dir,
+      .from_package = from_package,
+  };
+  return SM_FPKG_OK;
+}
+
+static sm_fpkg_status_t append_cnt_fallbacks(sm_pkg_read_fn read, void *ctx,
+                                              uint64_t package_size,
+                                              uint64_t cnt_offset,
+                                              sm_fpkg_tree_t *tree) {
+  uint8_t header[SM_FPKG_CNT_HEADER_SIZE];
+  if (read(ctx, cnt_offset, header, sizeof(header)) != 0)
+    return SM_FPKG_IO;
+  uint32_t count = read_be32(header + 0x10u);
+  uint64_t table_offset = cnt_offset + read_be32(header + 0x18u);
+  size_t table_size = (size_t)count * SM_FPKG_CNT_ENTRY_SIZE;
+  if (count == 0)
+    return SM_FPKG_OK;
+  uint8_t *entries = malloc(table_size);
+  if (!entries)
+    return SM_FPKG_NOMEM;
+  if (read(ctx, table_offset, entries, table_size) != 0) {
+    free(entries);
+    return SM_FPKG_IO;
+  }
+  sm_fpkg_status_t status = SM_FPKG_OK;
+  for (uint32_t i = 0; i < count && status == SM_FPKG_OK; ++i) {
+    const uint8_t *row = entries + (size_t)i * SM_FPKG_CNT_ENTRY_SIZE;
+    const char *path = cnt_fallback_path(read_be32(row));
+    uint32_t flags = read_be32(row + 8u);
+    uint64_t offset = cnt_offset + read_be32(row + 16u);
+    uint64_t size = read_be32(row + 20u);
+    if (!path || (flags & 0x80000000u) != 0 || size == 0)
+      continue;
+    if (!range_fits(offset, size, package_size)) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+    if (find_tree_path(tree, path))
+      continue;
+    sm_fpkg_tree_entry_t *directory = find_tree_path(tree, "sce_sys");
+    if (!directory) {
+      status = append_tree_path(tree, "sce_sys", 0, 0, true, false);
+      if (status != SM_FPKG_OK)
+        break;
+    } else if (!directory->is_dir) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+    status = append_tree_path(tree, path, size, offset, false, true);
+  }
+  free(entries);
+  return status;
+}
+
 static sm_fpkg_status_t read_outer_file(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     const uint32_t *mapping, uint64_t mapped, uint64_t file_size,
@@ -370,6 +462,7 @@ static sm_fpkg_status_t outer_child(
 static sm_fpkg_status_t validate_outer_metadata(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     uint32_t superblock_index, uint64_t inner_meta_base,
+    uint64_t package_size, uint64_t cnt_offset,
     const uint8_t *superblock, sm_fpkg_t *fpkg) {
   uint64_t inode_count = read_le64(superblock + 0x30u);
   uint32_t table_block = read_le32(superblock + 0xD8u);
@@ -462,6 +555,9 @@ static sm_fpkg_status_t validate_outer_metadata(
       status = sm_fpkg_tree_open(
           image_mount_read, image,
           parsed_layout.mount_size, inner_meta_base, &tree);
+      if (status == SM_FPKG_OK)
+        status = append_cnt_fallbacks(read, ctx, package_size, cnt_offset,
+                                      &tree);
     }
   }
   if (status == SM_FPKG_OK && fpkg) {
@@ -585,7 +681,7 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
   sm_fpkg_status_t outer_status = validate_outer_metadata(
       read, ctx, pfs_offset, block_count, (uint32_t)superblock_index,
       (uint64_t)read_le32(fih + 0x50u) * SM_FPKG_OUTER_BLOCK_SIZE,
-      superblock, fpkg);
+      size, cnt_offset, superblock, fpkg);
   if (outer_status != SM_FPKG_OK) {
     sm_fpkg_close(fpkg);
     return outer_status;
@@ -627,6 +723,15 @@ sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,
   if (entry->is_dir || !range_fits(offset, size, entry->size))
     return SM_FPKG_CORRUPT;
   if (!size) return SM_FPKG_OK;
+  if (entry->from_package) {
+    if (entry->package_offset > UINT64_MAX - offset ||
+        !range_fits(entry->package_offset + offset, size, fpkg->size))
+      return SM_FPKG_CORRUPT;
+    return fpkg->read(fpkg->read_ctx, entry->package_offset + offset, output,
+                      size) == 0
+               ? SM_FPKG_OK
+               : SM_FPKG_IO;
+  }
   if (entry->logical_offset > UINT64_MAX - offset)
     return SM_FPKG_CORRUPT;
   return sm_fpkg_image_read(fpkg->image, entry->logical_offset + offset,
