@@ -13,11 +13,12 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
   read-only from Downloads. No package data was copied into the repository;
   no game-file payload was extracted to disk.
 - PS5 console: unavailable in this task environment.
-- Linux CI: not run. Docker and Podman are unavailable. GitHub reports the
-  connected account as `pull=true`, `push=false` for `drakmor/ShadowMountPlus`,
-  and a push of the committed feature branch was rejected with HTTP 403. The
-  GitHub connector has no Actions dispatch operation. The Ubuntu PS5 workflow
-  includes the focused host checks, but it has not executed for this branch.
+- Local Linux containers: unavailable (`docker` and `podman` are not installed).
+- GitHub Actions: the first fork run for `7edc7b9` stopped in the second
+  `test_fpkg_index` link command because that writer-only fixture lacked a
+  stub for `sm_pkg_source_matches`; the PS5 build step did not run. The fixture
+  now supplies that stub and the same focused macOS link/run passes. A new
+  Actions run is pending for the fix commit.
 
 ## Baseline build and regression suite
 

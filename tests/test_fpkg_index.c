@@ -6,6 +6,13 @@
 
 #include "sm_fpkg_index.h"
 
+/* The index-writer fixture does not exercise fd-backed package identity. */
+bool sm_pkg_source_matches(const sm_pkg_info_t *info, const struct stat *st) {
+  (void)info;
+  (void)st;
+  return false;
+}
+
 static uint32_t le32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
          ((uint32_t)p[3] << 24);
