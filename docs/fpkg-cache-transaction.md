@@ -54,6 +54,11 @@ or has ambiguous ownership cannot be scanned for rebuild, mutated, or purged.
   validation and no active session references it.
 - Publish a single generation pointer/marker last; a sequence of renames across
   cache, appdb and mount state is not a transaction.
+- Where the kernel lacks no-replace rename, first pointer publication uses a
+  hard link and synchronizes the directory before removing the temporary name.
+  Recovery removes only a verified, backend-named alias of the same owned inode.
+  Directory transitions reserve and verify an empty destination inside the
+  private, title-locked cache directory before replacing that reservation.
 - Update SMP registration only after generation publication. If registration
   fails, retain the prior registration and last known-good generation; record
   the journal state for recovery.

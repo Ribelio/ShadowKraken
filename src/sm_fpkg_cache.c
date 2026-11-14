@@ -880,9 +880,72 @@ static sm_fpkg_status_t read_generation_identity(
   return SM_FPKG_OK;
 }
 
+/* A crash between linkat publication and unlinking the private temporary
+ * leaves two names for the same owned inode. Remove only that exact alias. */
+static bool valid_publication_alias(const char *target, const char *name) {
+  const char *prefix = !strcmp(target, "active") ? ".active-" : ".active-write-";
+  size_t prefix_length = strlen(prefix);
+  if (strncmp(name, prefix, prefix_length) != 0)
+    return false;
+  const char *p = name + prefix_length;
+  if (*p < '0' || *p > '9') return false;
+  while (*p >= '0' && *p <= '9') ++p;
+  if (*p++ != '-' || *p < '0' || *p > '9') return false;
+  while (*p >= '0' && *p <= '9') ++p;
+  return *p == '\0';
+}
+
+static bool recover_publication_alias(int title_fd, const char *target) {
+  struct stat published;
+  if (fstatat(title_fd, target, &published, AT_SYMLINK_NOFOLLOW) != 0)
+    return errno == ENOENT;
+  if (!S_ISREG(published.st_mode) || published.st_uid != geteuid() ||
+      (published.st_mode & 0022) != 0) { errno = EPERM; return false; }
+  if (published.st_nlink == 1) return true;
+  if (published.st_nlink != 2) { errno = EPERM; return false; }
+  int iterator = openat(title_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (iterator < 0) return false;
+  DIR *dir = fdopendir(iterator);
+  if (!dir) { close(iterator); return false; }
+  char alias[NAME_MAX + 1] = {0};
+  unsigned matches = 0;
+  bool ok = true;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(dir);
+    if (!entry) { if (errno) ok = false; break; }
+    if (!valid_publication_alias(target, entry->d_name)) continue;
+    struct stat candidate;
+    if (fstatat(title_fd, entry->d_name, &candidate, AT_SYMLINK_NOFOLLOW) != 0) {
+      ok = false; break;
+    }
+    if (candidate.st_dev != published.st_dev || candidate.st_ino != published.st_ino)
+      continue;
+    if (!S_ISREG(candidate.st_mode) || candidate.st_uid != geteuid() ||
+        candidate.st_nlink != 2 || (candidate.st_mode & 0022) != 0 ||
+        strlcpy(alias, entry->d_name, sizeof(alias)) >= sizeof(alias)) {
+      ok = false; break;
+    }
+    ++matches;
+  }
+  if (closedir(dir) != 0) ok = false;
+  struct stat current, temporary;
+  if (!ok || matches != 1 ||
+      fstatat(title_fd, target, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+      fstatat(title_fd, alias, &temporary, AT_SYMLINK_NOFOLLOW) != 0 ||
+      current.st_dev != published.st_dev || current.st_ino != published.st_ino ||
+      current.st_nlink != 2 || temporary.st_dev != published.st_dev ||
+      temporary.st_ino != published.st_ino || temporary.st_nlink != 2) {
+    errno = EPERM; return false;
+  }
+  return unlinkat(title_fd, alias, 0) == 0 && fsync(title_fd) == 0;
+}
+
 static sm_fpkg_status_t read_active_generation(
     int title_fd, const char *title_id, char generation_name_out[112]) {
   generation_name_out[0] = '\0';
+  if (!recover_publication_alias(title_fd, "active"))
+    return SM_FPKG_CORRUPT;
   char *active = NULL;
   size_t active_size = 0;
   sm_fpkg_status_t status = read_owned_file(
@@ -1593,6 +1656,9 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0)
     goto done_writable;
+  if (!recover_publication_alias(title_fd, ".writable-active")) {
+    status = SM_FPKG_CORRUPT; goto done_writable;
+  }
   status = read_generation_identity(title_fd, generation, title_id, true,
                                     &generation_fd, NULL);
   if (status != SM_FPKG_OK) goto done_writable;
@@ -2293,24 +2359,69 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
 
 static int rename_noreplace(int from_fd, const char *from, int to_fd,
                             const char *to) {
-#if defined(__APPLE__) && defined(RENAME_EXCL)
+#if !defined(SM_FPKG_FORCE_PORTABLE_RENAME) && defined(__APPLE__) && defined(RENAME_EXCL)
   return renameatx_np(from_fd, from, to_fd, to, RENAME_EXCL);
-#elif defined(__linux__) && defined(SYS_renameat2)
+#elif !defined(SM_FPKG_FORCE_PORTABLE_RENAME) && defined(__linux__) && defined(SYS_renameat2)
   return (int)syscall(SYS_renameat2, from_fd, from, to_fd, to,
                       RENAME_NOREPLACE);
-#elif defined(__FreeBSD__) && defined(AT_RENAME_NOREPLACE) && \
+#elif !defined(SM_FPKG_FORCE_PORTABLE_RENAME) && defined(__FreeBSD__) && defined(AT_RENAME_NOREPLACE) && \
     defined(SYS_renameat2)
   return (int)syscall(SYS_renameat2, from_fd, from, to_fd, to,
                       AT_RENAME_NOREPLACE);
 #else
-  (void)from_fd;
-  (void)from;
-  (void)to_fd;
-  (void)to;
-  errno = ENOTSUP;
-  return -1;
+  struct stat source;
+  if (fstatat(from_fd, from, &source, AT_SYMLINK_NOFOLLOW) != 0)
+    return -1;
+  if (S_ISREG(source.st_mode)) {
+    if (source.st_uid != geteuid() || source.st_nlink != 1 ||
+        (source.st_mode & 0022) != 0) { errno = EPERM; return -1; }
+    if (linkat(from_fd, from, to_fd, to, 0) != 0)
+      return -1;
+    if (fsync(to_fd) != 0)
+      return -1;
+    return unlinkat(from_fd, from, 0);
+  }
+  if (!S_ISDIR(source.st_mode) || source.st_uid != geteuid() ||
+      (source.st_mode & 0022) != 0) { errno = EPERM; return -1; }
+  /* The title directory is private and held under its lock. Reserve an empty
+   * destination exclusively, then replace only that verified reservation. */
+  if (mkdirat(to_fd, to, 0700) != 0)
+    return -1;
+  int reservation = openat(to_fd, to, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat reserved = {0}, current = {0}, source_now = {0};
+  bool reservation_valid = reservation >= 0 && fstat(reservation, &reserved) == 0 &&
+      S_ISDIR(reserved.st_mode) && reserved.st_uid == geteuid() &&
+      (reserved.st_mode & 0022) == 0;
+  bool verified = reservation_valid &&
+      fstatat(to_fd, to, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+      current.st_dev == reserved.st_dev && current.st_ino == reserved.st_ino &&
+      fstatat(from_fd, from, &source_now, AT_SYMLINK_NOFOLLOW) == 0 &&
+      source_now.st_dev == source.st_dev && source_now.st_ino == source.st_ino;
+  int result = verified ? renameat(from_fd, from, to_fd, to) : -1;
+  int saved = verified ? errno : EPERM;
+  if (result == 0) {
+    if (fstatat(to_fd, to, &current, AT_SYMLINK_NOFOLLOW) != 0 ||
+        current.st_dev != source.st_dev || current.st_ino != source.st_ino) {
+      result = -1;
+      saved = ESTALE;
+    }
+  } else if (reservation_valid &&
+             fstatat(to_fd, to, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+             current.st_dev == reserved.st_dev && current.st_ino == reserved.st_ino) {
+    (void)unlinkat(to_fd, to, AT_REMOVEDIR);
+  }
+  if (reservation >= 0) close(reservation);
+  if (result != 0) errno = saved;
+  return result;
 #endif
 }
+
+#ifdef SM_FPKG_TEST_RENAME
+int sm_fpkg_cache_test_rename_noreplace(int from_fd, const char *from,
+                                        int to_fd, const char *to) {
+  return rename_noreplace(from_fd, from, to_fd, to);
+}
+#endif
 
 static sm_fpkg_status_t write_active_generation(
     int title_fd, const char *generation_name, bool had_active) {

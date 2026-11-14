@@ -158,6 +158,22 @@ jobs:
             src/sm_fpkg_tree.c src/sm_fpkg_index.c \
             -o /tmp/sm-fpkg-cache-build-test
           /tmp/sm-fpkg-cache-build-test
+          # Exercise the PS5-compatible path even on Linux with renameat2.
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror \
+            -DSM_FPKG_FORCE_PORTABLE_RENAME -DSM_FPKG_TEST_RENAME \
+            -Iinclude -Isrc -Itests -include tests/host_platform.h \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/test_fpkg_cache.c src/sm_fpkg_backport.c src/sm_fpkg_cache.c \
+            src/sm_fpkg_index.c -o /tmp/sm-fpkg-cache-portable-test
+          /tmp/sm-fpkg-cache-portable-test
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror \
+            -DSM_FPKG_FORCE_PORTABLE_RENAME -Iinclude -Isrc -Itests \
+            -include tests/host_platform.h -fsanitize=address,undefined \
+            -fno-omit-frame-pointer tests/test_fpkg_cache_build.c \
+            src/sm_fpkg_backport.c src/sm_fpkg_cache.c src/sm_fpkg.c \
+            src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c \
+            src/sm_fpkg_tree.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-build-portable-test
+          /tmp/sm-fpkg-build-portable-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror \
             -Wno-macro-redefined -Iinclude -Isrc -Itests \
             -include tests/host_platform.h -ffunction-sections -fdata-sections \

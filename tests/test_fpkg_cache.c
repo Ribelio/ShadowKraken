@@ -9,6 +9,11 @@
 #include "sm_fpkg.h"
 #include "sm_time.h"
 
+#ifdef SM_FPKG_TEST_RENAME
+int sm_fpkg_cache_test_rename_noreplace(int from_fd, const char *from,
+                                        int to_fd, const char *to);
+#endif
+
 #define TEST_TITLE_ID "PPSA00001"
 #define TEST_SOURCE_PATH "/tmp/synthetic.pkg"
 
@@ -265,6 +270,40 @@ int main(void) {
   int active_fd = make_generation(title_fd, active_name, 2u);
   assert(close(active_fd) == 0);
   write_active(title_fd, active_name);
+  assert(linkat(title_fd, "active", title_fd, ".active-123-456", 0) == 0);
+  sm_fpkg_cache_recovery_report_t alias_report;
+  assert(sm_fpkg_cache_recover_title(cache_root, TEST_TITLE_ID, &alias_report) == SM_FPKG_OK);
+  struct stat alias_stat;
+  assert(fstatat(title_fd, ".active-123-456", &alias_stat, AT_SYMLINK_NOFOLLOW) != 0 &&
+         errno == ENOENT);
+  assert(linkat(title_fd, "active", title_fd, "foreign-link", 0) == 0);
+  assert(sm_fpkg_cache_recover_title(cache_root, TEST_TITLE_ID, &alias_report) == SM_FPKG_CORRUPT);
+  assert(fstatat(title_fd, "foreign-link", &alias_stat, AT_SYMLINK_NOFOLLOW) == 0);
+  assert(unlinkat(title_fd, "foreign-link", 0) == 0);
+  assert(linkat(title_fd, "active", title_fd, ".active-not-owned", 0) == 0);
+  assert(sm_fpkg_cache_recover_title(cache_root, TEST_TITLE_ID, &alias_report) == SM_FPKG_CORRUPT);
+  assert(fstatat(title_fd, ".active-not-owned", &alias_stat, AT_SYMLINK_NOFOLLOW) == 0);
+  assert(unlinkat(title_fd, ".active-not-owned", 0) == 0);
+#ifdef SM_FPKG_TEST_RENAME
+  assert(mkdirat(title_fd, "rename-source", 0700) == 0);
+  assert(mkdirat(title_fd, "rename-foreign", 0700) == 0);
+  int foreign_fd = openat(title_fd, "rename-foreign", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+  assert(foreign_fd >= 0);
+  write_at(foreign_fd, "user-file", "preserve", 0600);
+  assert(close(foreign_fd) == 0);
+  assert(sm_fpkg_cache_test_rename_noreplace(title_fd, "rename-source", title_fd,
+                                            "rename-foreign") != 0);
+  assert(fstatat(title_fd, "rename-source", &alias_stat, AT_SYMLINK_NOFOLLOW) == 0);
+  assert(fstatat(title_fd, "rename-foreign/user-file", &alias_stat, AT_SYMLINK_NOFOLLOW) == 0);
+  write_at(title_fd, "rename-file-source", "ours", 0600);
+  write_at(title_fd, "rename-file-foreign", "user", 0600);
+  assert(sm_fpkg_cache_test_rename_noreplace(title_fd, "rename-file-source", title_fd,
+                                            "rename-file-foreign") != 0);
+  int foreign_file = openat(title_fd, "rename-file-foreign", O_RDONLY | O_NOFOLLOW);
+  char foreign_data[4];
+  assert(foreign_file >= 0 && read(foreign_file, foreign_data, sizeof(foreign_data)) == 4);
+  assert(!memcmp(foreign_data, "user", 4) && close(foreign_file) == 0);
+#endif
   char writable_path[MAX_PATH], writable_generation[MAX_PATH];
   assert(snprintf(writable_generation, sizeof(writable_generation), "%s/%s/%s",
                   cache_root, TEST_TITLE_ID, active_name) > 0);
@@ -275,6 +314,12 @@ int main(void) {
   assert(unlinkat(title_fd, "writable", 0) == 0);
   assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
                                         writable_generation, writable_path) == SM_FPKG_OK);
+  assert(linkat(title_fd, ".writable-active", title_fd,
+                ".active-write-123-456", 0) == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, writable_path) == SM_FPKG_OK);
+  assert(fstatat(title_fd, ".active-write-123-456", &alias_stat,
+                 AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT);
   int writable_fd = open(writable_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   assert(writable_fd >= 0);
   write_at(writable_fd, "game-created.dat", "persistent", 0600);
