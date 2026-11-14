@@ -1,8 +1,9 @@
 use ampr_pkg::kraken::{decode_block, Desc, Scratch};
 use ampr_pkg::{CHUNK_KRAKEN, CHUNK_KRAKEN_FULL};
 use std::env;
-use std::fs;
+use std::fs::{self, FileTimes, OpenOptions};
 use std::path::Path;
+use std::time::{Duration, UNIX_EPOCH};
 
 #[path = "../../../kraken-mount-reference/src/ampr_index.rs"]
 #[allow(dead_code)]
@@ -65,6 +66,14 @@ fn main() {
     fs::create_dir_all(&reference_dir).unwrap();
     let reference_package = reference_dir.join("kraken.pkg");
     fs::copy(&args[3], &reference_package).unwrap();
+    OpenOptions::new()
+        .write(true)
+        .open(&reference_package)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(
+            UNIX_EPOCH + Duration::from_secs(123),
+        ))
+        .expect("set deterministic package mtime for AMPR index oracle");
     let reference_files = [
         kraken_ampr_index::IndexFile {
             path: "eboot.bin".to_string(),

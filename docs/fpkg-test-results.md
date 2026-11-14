@@ -14,11 +14,13 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
   no game-file payload was extracted to disk.
 - PS5 console: unavailable in this task environment.
 - Local Linux containers: unavailable (`docker` and `podman` are not installed).
-- GitHub Actions: the first fork run for `7edc7b9` stopped in the second
-  `test_fpkg_index` link command because that writer-only fixture lacked a
-  stub for `sm_pkg_source_matches`; the PS5 build step did not run. The fixture
-  now supplies that stub and the same focused macOS link/run passes. A new
-  Actions run is pending for the fix commit.
+- GitHub Actions: run `7edc7b9` stopped at the second `test_fpkg_index` link
+  because its writer-only fixture lacked a `sm_pkg_source_matches` stub. After
+  fixing that link, run `d31a850` reached the pinned AMPR oracle and exposed a
+  nondeterministic mtime on its copied synthetic package. The fixture now sets
+  the copied file's mtime to the same fixed value used by the C writer; the
+  corrected workflow is pending on the next commit. Neither failed run reached
+  the PS5 payload build step.
 
 ## Baseline build and regression suite
 
