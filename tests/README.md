@@ -8,17 +8,21 @@ python3 tools/test_shellcore_launch.py --sanitize
 python3 tools/test_sandbox_cleanup.py
 ```
 
-The standalone FPKG envelope and outer-metadata safety test is also run by the
-Linux PS5 build workflow. Run it locally with:
+The standalone FPKG envelope, outer-metadata and AMPR index checks are also run
+by the Linux PS5 build workflow. Run them locally with:
 
 ```sh
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test
 /tmp/sm-fpkg-header-test
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  tests/test_fpkg_index.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-index-test
+/tmp/sm-fpkg-index-test
 ```
 
-It uses synthetic bytes and is not a real FPKG compatibility test.
+These tests use synthetic bytes and are not real FPKG compatibility tests.
 
 The config test compiles the production implementation with host stubs for
 logging, localization and backend names. It checks concurrent initialization,

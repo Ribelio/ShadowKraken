@@ -142,7 +142,9 @@ Planned implementation areas, gated in order:
    inner-tree parsing, decoding and extraction are not implemented. Its outer
    metadata file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). Do not
    duplicate `sm_pkg` metadata handling.
-2. Native AMPR index writer and byte-comparison tests against pinned reference.
+2. `src/sm_fpkg_index.c` now builds AMPRIDX3 and AMPRPAK4, including codec-2
+   records. One synthetic output passed the pinned AMPR v0.4.0 parser; golden
+   byte-comparison, broader record coverage and selected chunk readback remain.
 3. Existing cache owner, with transaction journal, source fingerprint and disabled
    configuration key in `sm_config_mount.c`, config file/API surfaces as needed.
 4. Scanner/registration/lifecycle/mount path extensions, only after prior gates.

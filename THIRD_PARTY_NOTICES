@@ -9,5 +9,11 @@ the implementation is a C port and is distributed under the repository's
 GPL-3.0 license. No game package, game asset, Kraken binary, Rust runtime, or
 AMPR binary is included.
 
+The AMPRIDX3/AMPRPAK4 writer in src/sm_fpkg_index.c follows the GPL-3.0-or-later
+writer in Kraken Mount at the revision above and validates its output against
+ampr-emu-ng v0.4.0 source revision
+920e9172b6bf99bd9210361b545e2953659d1e9b, also GPL-3.0-or-later. No AMPR
+runtime code or binary is included.
+
 Kraken Mount's separate THIRD_PARTY_NOTICES file identifies its own bundled
 third-party components. Those components are not included by this FPKG reader.
