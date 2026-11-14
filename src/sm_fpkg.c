@@ -39,6 +39,9 @@ struct sm_fpkg {
   sm_pkg_info_t metadata;
   uint32_t *image_map;
   uint64_t image_map_count;
+  uint64_t image_size;
+  uint64_t pfs_offset;
+  uint64_t outer_block_count;
   sm_fpkg_layout_t layout;
   sm_fpkg_image_reader_t *image;
   sm_fpkg_tree_t tree;
@@ -565,6 +568,9 @@ static sm_fpkg_status_t validate_outer_metadata(
     image = NULL;
     fpkg->image_map = image_map;
     fpkg->image_map_count = image_mapped;
+    fpkg->image_size = image_size;
+    fpkg->pfs_offset = pfs_offset;
+    fpkg->outer_block_count = block_count;
     fpkg->layout = parsed_layout;
     fpkg->tree = tree;
     image_map = NULL;
@@ -712,6 +718,168 @@ bool sm_fpkg_file_at(const sm_fpkg_t *fpkg, size_t index,
   file_out->size = entry->size;
   file_out->is_directory = entry->is_dir;
   return true;
+}
+
+static size_t find_layout_block(const sm_fpkg_layout_t *layout,
+                                uint64_t logical_offset) {
+  size_t low = 0, high = layout->block_count;
+  while (low < high) {
+    size_t middle = low + (high - low) / 2u;
+    if (layout->blocks[middle].logical_offset < logical_offset)
+      low = middle + 1u;
+    else
+      high = middle;
+  }
+  return low;
+}
+
+static sm_fpkg_status_t stored_range_to_package(const sm_fpkg_t *fpkg,
+                                                uint64_t stored_offset,
+                                                uint32_t stored_size,
+                                                uint64_t *package_offset_out) {
+  if (!package_offset_out || stored_size == 0 ||
+      !range_fits(stored_offset, stored_size, fpkg->image_size))
+    return SM_FPKG_CORRUPT;
+  uint64_t done = 0, first = 0;
+  while (done < stored_size) {
+    uint64_t at = stored_offset + done;
+    uint64_t map_index = at / SM_FPKG_OUTER_BLOCK_SIZE;
+    uint64_t within = at % SM_FPKG_OUTER_BLOCK_SIZE;
+    if (map_index >= fpkg->image_map_count)
+      return SM_FPKG_CORRUPT;
+    uint32_t outer_block = fpkg->image_map[map_index];
+    if ((uint64_t)outer_block >= fpkg->outer_block_count)
+      return SM_FPKG_CORRUPT;
+    uint64_t absolute = fpkg->pfs_offset +
+                        (uint64_t)outer_block * SM_FPKG_OUTER_BLOCK_SIZE +
+                        within;
+    uint64_t amount = SM_FPKG_OUTER_BLOCK_SIZE - within;
+    if (amount > stored_size - done)
+      amount = stored_size - done;
+    if (done == 0)
+      first = absolute;
+    else if (first > UINT64_MAX - done || first + done != absolute)
+      return SM_FPKG_UNSUPPORTED;
+    done += amount;
+  }
+  if (!range_fits(first, stored_size, fpkg->size))
+    return SM_FPKG_CORRUPT;
+  *package_offset_out = first;
+  return SM_FPKG_OK;
+}
+
+static sm_fpkg_status_t collect_file_blocks(const sm_fpkg_t *fpkg,
+                                            size_t index,
+                                            sm_fpkg_block_t *blocks,
+                                            size_t block_capacity,
+                                            size_t *count_out) {
+  if (!fpkg || !count_out || index >= fpkg->tree.count)
+    return SM_FPKG_CORRUPT;
+  *count_out = 0;
+  const sm_fpkg_tree_entry_t *entry = &fpkg->tree.entries[index];
+  if (entry->is_dir)
+    return SM_FPKG_CORRUPT;
+  if (entry->size == 0)
+    return SM_FPKG_OK;
+
+  if (entry->from_package) {
+    uint64_t count = entry->size / 0x40000u +
+                     (entry->size % 0x40000u != 0);
+    if (count > SIZE_MAX)
+      return SM_FPKG_UNSUPPORTED;
+    *count_out = (size_t)count;
+    if (!blocks)
+      return block_capacity == 0 ? SM_FPKG_OK : SM_FPKG_CORRUPT;
+    if (block_capacity < *count_out)
+      return SM_FPKG_UNSUPPORTED;
+    uint64_t done = 0;
+    for (size_t i = 0; i < *count_out; ++i) {
+      uint64_t remaining = entry->size - done;
+      uint32_t raw_size = remaining > 0x40000u ? 0x40000u :
+                                                    (uint32_t)remaining;
+      if (entry->package_offset > UINT64_MAX - done ||
+          !range_fits(entry->package_offset + done, raw_size, fpkg->size))
+        return SM_FPKG_CORRUPT;
+      blocks[i] = (sm_fpkg_block_t){
+          .package_offset = entry->package_offset + done,
+          .stored_size = raw_size,
+          .raw_size = raw_size,
+          .even_size = raw_size < 0x20000u ? raw_size : 0x20000u,
+          .kraken_encoded = false,
+      };
+      done += raw_size;
+    }
+    return SM_FPKG_OK;
+  }
+
+  size_t layout_index = find_layout_block(&fpkg->layout,
+                                          entry->logical_offset);
+  if (layout_index >= fpkg->layout.block_count ||
+      fpkg->layout.blocks[layout_index].logical_offset !=
+          entry->logical_offset)
+    return SM_FPKG_UNSUPPORTED;
+  size_t count = 0;
+  uint64_t produced = 0;
+  size_t current = layout_index;
+  while (produced < entry->size) {
+    if (current >= fpkg->layout.block_count ||
+        count >= fpkg->layout.block_count)
+      return SM_FPKG_CORRUPT;
+    const sm_fpkg_layout_block_t *block = &fpkg->layout.blocks[current];
+    if (block->logical_offset != entry->logical_offset + produced ||
+        block->logical_length == 0)
+      return SM_FPKG_CORRUPT;
+    uint64_t wanted = entry->size - produced;
+    if (wanted > block->logical_length)
+      wanted = block->logical_length;
+    uint64_t package_offset;
+    sm_fpkg_status_t status = stored_range_to_package(
+        fpkg, block->stored_offset, block->stored_length, &package_offset);
+    if (status != SM_FPKG_OK)
+      return status;
+    if (blocks) {
+      if (count >= block_capacity)
+        return SM_FPKG_UNSUPPORTED;
+      blocks[count] = (sm_fpkg_block_t){
+          .package_offset = package_offset,
+          .stored_size = block->stored_length,
+          .raw_size = block->logical_length,
+          .even_size = block->even_length,
+          .mode = block->mode,
+          .kraken_encoded = !block->raw,
+      };
+    }
+    ++count;
+    produced += wanted;
+    ++current;
+  }
+  *count_out = count;
+  return blocks || block_capacity == 0 ? SM_FPKG_OK : SM_FPKG_CORRUPT;
+}
+
+sm_fpkg_status_t sm_fpkg_file_block_count(const sm_fpkg_t *fpkg,
+                                           size_t index,
+                                           size_t *count_out) {
+  return collect_file_blocks(fpkg, index, NULL, 0, count_out);
+}
+
+sm_fpkg_status_t sm_fpkg_file_blocks(const sm_fpkg_t *fpkg, size_t index,
+                                      sm_fpkg_block_t *blocks,
+                                      size_t block_capacity,
+                                      size_t *count_out) {
+  if (!count_out || (!blocks && block_capacity != 0))
+    return SM_FPKG_CORRUPT;
+  size_t needed = 0;
+  sm_fpkg_status_t status =
+      collect_file_blocks(fpkg, index, NULL, 0, &needed);
+  if (status != SM_FPKG_OK)
+    return status;
+  *count_out = needed;
+  if (needed == 0)
+    return SM_FPKG_OK;
+  if (!blocks || block_capacity < needed)
+    return SM_FPKG_UNSUPPORTED;
+  return collect_file_blocks(fpkg, index, blocks, block_capacity, count_out);
 }
 
 sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,

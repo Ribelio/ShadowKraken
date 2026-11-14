@@ -149,7 +149,9 @@ Planned implementation areas, gated in order:
    inner image on demand and validates its superblock, inode table and bounded
    directory tree into a bounded in-memory entry list. Its opaque public handle
    enumerates validated paths and supports range reads from files, including the
-   three reference CNT fallbacks (`icon0.png`, `icon0.dds`, and `param.json`). It does not
+   three reference CNT fallbacks (`icon0.png`, `icon0.dds`, and `param.json`). It
+   can also map block-aligned file ranges to contiguous package offsets for AMPR
+   codec-2 records, and rejects unaligned or discontiguous ranges. It does not
    yet extract files or produce the normalized AMPR file index. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors

@@ -75,8 +75,8 @@ static void make_layout_descriptor(uint8_t *bytes) {
 
 static void put_inner_image(memory_pkg_t *pkg, uint64_t offset,
                             const uint8_t *bytes, size_t size) {
-  static const uint32_t outer_blocks[] = {4, 6, 7, 8, 9, 10,
-                                           11, 12, 13, 14, 15, 16};
+  static const uint32_t outer_blocks[] = {4, 5, 6, 7, 8, 9,
+                                           10, 11, 12, 13, 14, 15};
   size_t done = 0;
   while (done < size) {
     uint64_t at = offset + done;
@@ -147,14 +147,14 @@ static void valid_envelope(memory_pkg_t *pkg) {
   set_dinode(inodes + 2u * DINODE_SIZE, 12u * OUTER_BLOCK, 4);
   for (unsigned i = 1; i < 12; ++i)
     put_le32(inodes + 2u * DINODE_SIZE + 0x64u + i * 36u + 32u,
-             i == 1 ? 6u : i + 5u);
-  set_dinode(inodes + 3u * DINODE_SIZE, DESCRIPTOR_SIZE, 5);
+             i + 4u);
+  set_dinode(inodes + 3u * DINODE_SIZE, DESCRIPTOR_SIZE, 22);
 
   make_dirent(pkg->bytes + 3u * OUTER_BLOCK, 1, "uroot");
   uint8_t *uroot = pkg->bytes + 4u * OUTER_BLOCK;
   make_dirent(uroot, 2, "pfs_image.dat");
   make_dirent(uroot + 29, 3, "naps_pkg_layout.dat");
-  make_layout_descriptor(pkg->bytes + 6u * OUTER_BLOCK);
+  make_layout_descriptor(pkg->bytes + 23u * OUTER_BLOCK);
 
   uint8_t inner_superblock[0x40] = {0};
   put_le64(inner_superblock, 2);
@@ -171,7 +171,7 @@ static void valid_envelope(memory_pkg_t *pkg) {
   uint8_t file_inode[INNER_INODE_SIZE] = {0};
   put_le16(file_inode, 0x8000u);
   put_le64(file_inode + 8, 13);
-  put_le64(file_inode + 0x60, 0x2000u);
+  put_le64(file_inode + 0x60, 0);
   put_inner_image(pkg, 0x50000u + 5u * INNER_INODE_SIZE, file_inode,
                   sizeof(file_inode));
   uint8_t dirent[25] = {0};
@@ -179,12 +179,12 @@ static void valid_envelope(memory_pkg_t *pkg) {
   put_le32(dirent + 4, 2);
   put_inner_image(pkg, 0xA0000u, dirent, sizeof(dirent));
   static const uint8_t payload[] = "hello native!";
-  put_inner_image(pkg, 0x2000u, payload, sizeof(payload) - 1u);
+  put_inner_image(pkg, 0, payload, sizeof(payload) - 1u);
 }
 
 static void set_indirect_image_file(memory_pkg_t *pkg, uint32_t indirect_data) {
-  static const uint32_t original_map[] = {4, 6, 7, 8, 9, 10,
-                                           11, 12, 13, 14, 15, 16};
+  static const uint32_t original_map[] = {4, 5, 6, 7, 8, 9,
+                                           10, 11, 12, 13, 14, 15};
   uint8_t image[12u * OUTER_BLOCK];
   for (unsigned i = 0; i < 12; ++i)
     memcpy(image + (size_t)i * OUTER_BLOCK,
@@ -223,6 +223,18 @@ int main(void) {
   assert(sm_fpkg_file_at(fpkg, 0, &file));
   assert(strcmp(file.path, "eboot.bin") == 0 && file.size == 13 &&
          !file.is_directory);
+  size_t block_count = 0;
+  assert(sm_fpkg_file_block_count(fpkg, 0, &block_count) == SM_FPKG_OK);
+  assert(block_count == 1);
+  assert(sm_fpkg_file_blocks(fpkg, 0, NULL, 0, &block_count) ==
+         SM_FPKG_UNSUPPORTED);
+  assert(block_count == 1);
+  sm_fpkg_block_t block;
+  assert(sm_fpkg_file_blocks(fpkg, 0, &block, 1, &block_count) ==
+         SM_FPKG_OK);
+  assert(block_count == 1 && block.package_offset == 5u * OUTER_BLOCK &&
+         block.stored_size == 0x40000u && block.raw_size == 0x40000u &&
+         !block.kraken_encoded);
   uint8_t payload[13];
   assert(sm_fpkg_read_file(fpkg, 0, 0, payload, sizeof(payload)) ==
          SM_FPKG_OK);
@@ -251,6 +263,25 @@ int main(void) {
   assert(sm_fpkg_read_file(fpkg, icon_index, 0, icon, sizeof(icon)) ==
          SM_FPKG_OK);
   assert(memcmp(icon, "CNT icon data!", sizeof(icon)) == 0);
+  assert(sm_fpkg_file_block_count(fpkg, icon_index, &block_count) ==
+         SM_FPKG_OK);
+  assert(block_count == 1);
+  sm_fpkg_block_t cnt_block;
+  assert(sm_fpkg_file_blocks(fpkg, icon_index, &cnt_block, 1, &block_count) ==
+         SM_FPKG_OK);
+  assert(cnt_block.package_offset == CNT_OFFSET + 0x1800u &&
+         cnt_block.stored_size == 14u && cnt_block.raw_size == 14u &&
+         !cnt_block.kraken_encoded);
+  sm_fpkg_close(fpkg);
+  valid_envelope(&pkg);
+  uint8_t unaligned_offset[8];
+  put_le64(unaligned_offset, 0x2000u);
+  put_inner_image(&pkg, 0x50000u + 5u * INNER_INODE_SIZE + 0x60u,
+                  unaligned_offset, sizeof(unaligned_offset));
+  assert(sm_fpkg_open_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                             &pkg, &info, &fpkg) == SM_FPKG_OK);
+  assert(sm_fpkg_file_block_count(fpkg, 0, &block_count) ==
+         SM_FPKG_UNSUPPORTED);
   sm_fpkg_close(fpkg);
   valid_envelope(&pkg);
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,

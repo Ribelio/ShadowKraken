@@ -25,6 +25,15 @@ typedef struct {
   bool is_directory;
 } sm_fpkg_file_t;
 
+typedef struct {
+  uint64_t package_offset;
+  uint32_t stored_size;
+  uint32_t raw_size;
+  uint32_t even_size;
+  uint8_t mode;
+  bool kraken_encoded;
+} sm_fpkg_block_t;
+
 /*
  * Open a validated FPKG reader. The read callback and its context must stay
  * alive until sm_fpkg_close; the handle retains only bounded metadata and one
@@ -38,6 +47,16 @@ void sm_fpkg_close(sm_fpkg_t *fpkg);
 size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg);
 bool sm_fpkg_file_at(const sm_fpkg_t *fpkg, size_t index,
                      sm_fpkg_file_t *file_out);
+/* Return the AMPR-packable 256 KiB blocks for a file. A file whose data does
+ * not start on a Kraken block boundary, or whose stored block spans nonadjacent
+ * package extents, returns SM_FPKG_UNSUPPORTED. */
+sm_fpkg_status_t sm_fpkg_file_block_count(const sm_fpkg_t *fpkg,
+                                           size_t index,
+                                           size_t *count_out);
+sm_fpkg_status_t sm_fpkg_file_blocks(const sm_fpkg_t *fpkg, size_t index,
+                                      sm_fpkg_block_t *blocks,
+                                      size_t block_capacity,
+                                      size_t *count_out);
 sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,
                                    uint64_t offset, void *output,
                                    size_t size);
