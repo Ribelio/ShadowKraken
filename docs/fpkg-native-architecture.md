@@ -23,10 +23,13 @@ Kraken daemon or proprietary game data is part of the planned SMP implementation
 
 PR #200 (`quer3q/ShadowMountPlus`, head `3663a32e56130c722ee0aa77623be5f19d5674ee`)
 is still open against `1.7`, not part of the inspected SMP baseline. It proposes
-recognizing/updating AMPR NG in fakelib. PR #206 and #215 must be refreshed from
-GitHub before an upstream PR is prepared; no AMPR-NG integration was assumed to
-be merged based on their numbers. The connected GitHub account has read-only
-permission on upstream.
+recognizing/updating AMPR NG in fakelib and must be reconciled before runtime
+integration. PR #206 is also open against `1.7` (head
+`3596e602f7c1c89faff53d55215fc02e89a48703`); it changes same-title process
+handoff to reuse a prepared/mounted runtime before binding the replacement
+process. That lifecycle ownership behavior must be reconciled before adding a
+new launch layer. PR #215 was closed unmerged and is an unrelated Trail/docs
+change. The connected GitHub account has read-only permission on upstream.
 
 ## Kraken function map
 
