@@ -24,6 +24,7 @@ typedef enum {
   INSTALL_TRACK_NONE = 0,
   INSTALL_TRACK_QUEUED,
   INSTALL_TRACK_SUBMITTED,
+  INSTALL_TRACK_CLEANUP,
 } install_track_state_t;
 
 typedef struct {
@@ -35,6 +36,7 @@ typedef struct {
   uint64_t requested_at_us;
   bool has_src_snd0;
   bool manual;
+  bool registration_confirmed;
   install_track_state_t state;
 } pending_install_entry_t;
 
@@ -42,6 +44,7 @@ static pending_install_entry_t g_pending_installs[MAX_PENDING];
 static uint64_t g_pending_install_poll_due_us = 0;
 static uint64_t g_queued_install_submit_due_us = 0;
 static atomic_int g_tracked_install_count = 0;
+static atomic_int g_registration_pending_count = 0;
 static int g_submitted_install_count = 0;
 static bool g_queued_install_batch_announced = false;
 static bool g_queued_install_submit_failure_notified = false;
@@ -57,7 +60,7 @@ static bool install_queue_active(void) {
 }
 
 bool sm_install_has_pending_work(void) {
-  return atomic_load_explicit(&g_tracked_install_count,
+  return atomic_load_explicit(&g_registration_pending_count,
                               memory_order_acquire) > 0;
 }
 
@@ -109,7 +112,15 @@ static uint64_t next_pending_install_timeout_us(void) {
 }
 
 static void schedule_pending_install_poll(uint64_t now_us) {
-  if (g_submitted_install_count <= 0) {
+  bool needs_poll = false;
+  for (int i = 0; i < MAX_PENDING; ++i) {
+    if (g_pending_installs[i].state == INSTALL_TRACK_SUBMITTED ||
+        g_pending_installs[i].state == INSTALL_TRACK_CLEANUP) {
+      needs_poll = true;
+      break;
+    }
+  }
+  if (!needs_poll) {
     g_pending_install_poll_due_us = 0;
     return;
   }
@@ -142,6 +153,10 @@ static void clear_pending_install_entry(pending_install_entry_t *entry) {
     return;
   if (entry->state == INSTALL_TRACK_SUBMITTED && g_submitted_install_count > 0)
     g_submitted_install_count--;
+  if (entry->state == INSTALL_TRACK_QUEUED ||
+      entry->state == INSTALL_TRACK_SUBMITTED)
+    atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
   if (entry->state != INSTALL_TRACK_NONE &&
       atomic_load_explicit(&g_tracked_install_count,
                            memory_order_relaxed) > 0) {
@@ -150,7 +165,7 @@ static void clear_pending_install_entry(pending_install_entry_t *entry) {
   }
   memset(entry, 0, sizeof(*entry));
   if (g_submitted_install_count <= 0)
-    g_pending_install_poll_due_us = 0;
+    schedule_pending_install_poll(monotonic_time_us());
   if (atomic_load_explicit(&g_tracked_install_count,
                            memory_order_acquire) <= 0) {
     g_queued_install_submit_due_us = 0;
@@ -211,12 +226,23 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
   if (previous_state == INSTALL_TRACK_SUBMITTED)
     return true;
 
+  char pending_previous_generation[sizeof(entry->previous_fpkg_generation)];
+  pending_previous_generation[0] = '\0';
+  if (previous_state != INSTALL_TRACK_NONE)
+    (void)strlcpy(pending_previous_generation,
+                  entry->previous_fpkg_generation,
+                  sizeof(pending_previous_generation));
+
   memset(entry, 0, sizeof(*entry));
   (void)strlcpy(entry->title_id, candidate->title_id, sizeof(entry->title_id));
   (void)strlcpy(entry->title_name, candidate->title_name,
                 sizeof(entry->title_name));
   (void)strlcpy(entry->source_path, candidate->path, sizeof(entry->source_path));
-  if (previous_fpkg_generation_name)
+  if (pending_previous_generation[0])
+    (void)strlcpy(entry->previous_fpkg_generation,
+                  pending_previous_generation,
+                  sizeof(entry->previous_fpkg_generation));
+  else if (previous_fpkg_generation_name)
     (void)strlcpy(entry->previous_fpkg_generation,
                   previous_fpkg_generation_name,
                   sizeof(entry->previous_fpkg_generation));
@@ -225,9 +251,15 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
   entry->manual = candidate->manual;
   entry->has_src_snd0 = has_src_snd0;
   entry->state = INSTALL_TRACK_QUEUED;
-  if (previous_state == INSTALL_TRACK_NONE)
+  if (previous_state == INSTALL_TRACK_NONE) {
     atomic_fetch_add_explicit(&g_tracked_install_count, 1,
                               memory_order_release);
+    atomic_fetch_add_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+  } else if (previous_state == INSTALL_TRACK_CLEANUP) {
+    atomic_fetch_add_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+  }
   if (was_queue_empty) {
     g_queued_install_batch_announced = false;
     g_queued_install_submit_failure_notified = false;
@@ -240,21 +272,36 @@ static void finalize_pending_install_success(pending_install_entry_t *entry) {
   if (!entry)
     return;
 
-  log_debug("  [REG] Installed: %s (%s)", entry->title_name, entry->title_id);
-  notify_game_installed_rich(entry->title_id);
-  if (entry->has_src_snd0) {
-    int snd0_updates = update_snd0info(entry->title_id);
-    if (snd0_updates >= 0)
-      log_debug("  [DB] snd0info updated rows=%d", snd0_updates);
+  if (!entry->registration_confirmed) {
+    log_debug("  [REG] Installed: %s (%s)", entry->title_name,
+              entry->title_id);
+    notify_game_installed_rich(entry->title_id);
+    if (entry->has_src_snd0) {
+      int snd0_updates = update_snd0info(entry->title_id);
+      if (snd0_updates >= 0)
+        log_debug("  [DB] snd0info updated rows=%d", snd0_updates);
+    }
+    cache_game_entry(entry->source_path, entry->title_id, entry->title_name);
+    if (entry->manual)
+      sm_manual_note_installed(entry->manual_source_path, entry->title_id,
+                               entry->title_name);
+    clear_register_attempts(entry->title_id);
+    clear_failed_mount_attempts(entry->title_id);
+    entry->registration_confirmed = true;
   }
-  cache_game_entry(entry->source_path, entry->title_id, entry->title_name);
-  sm_install_release_replaced_fpkg_generation(
-      entry->title_id, entry->previous_fpkg_generation, entry->source_path);
-  if (entry->manual)
-    sm_manual_note_installed(entry->manual_source_path, entry->title_id,
-                             entry->title_name);
-  clear_register_attempts(entry->title_id);
-  clear_failed_mount_attempts(entry->title_id);
+  if (!sm_install_release_replaced_fpkg_generation(
+          entry->title_id, entry->previous_fpkg_generation,
+          entry->source_path)) {
+    if (entry->state == INSTALL_TRACK_SUBMITTED) {
+      if (g_submitted_install_count > 0)
+        --g_submitted_install_count;
+      atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                                memory_order_release);
+    }
+    entry->state = INSTALL_TRACK_CLEANUP;
+    schedule_pending_install_poll(monotonic_time_us());
+    return;
+  }
   clear_pending_install_entry(entry);
 }
 
@@ -271,20 +318,26 @@ static void finalize_pending_install_timeout(pending_install_entry_t *entry) {
 }
 
 static void poll_pending_installs(void) {
-  if (g_submitted_install_count <= 0)
-    return;
-
-  invalidate_app_db_title_cache();
-
   struct AppDbTitleList app_db_titles = {0};
-  bool app_db_titles_ready = get_app_db_title_list_cached(&app_db_titles);
+  bool app_db_titles_ready = false;
+  if (g_submitted_install_count > 0) {
+    invalidate_app_db_title_cache();
+    app_db_titles_ready = get_app_db_title_list_cached(&app_db_titles);
+  }
   uint64_t now_us = monotonic_time_us();
 
-  if (!app_db_titles_ready)
+  if (g_submitted_install_count > 0 && !app_db_titles_ready)
     log_debug("  [DB] app.db title list unavailable while polling installs");
 
   for (int i = 0; i < MAX_PENDING; i++) {
     pending_install_entry_t *entry = &g_pending_installs[i];
+    if (entry->state == INSTALL_TRACK_CLEANUP) {
+      if (sm_install_release_replaced_fpkg_generation(
+              entry->title_id, entry->previous_fpkg_generation,
+              entry->source_path))
+        clear_pending_install_entry(entry);
+      continue;
+    }
     if (entry->state != INSTALL_TRACK_SUBMITTED)
       continue;
 
@@ -316,8 +369,14 @@ uint64_t sm_install_next_wake_us(uint64_t now_us) {
   if (!install_queue_active())
     return 0;
 
-  if (g_submitted_install_count <= 0)
+  if (g_submitted_install_count <= 0) {
+    if (g_pending_install_poll_due_us == 0)
+      return g_queued_install_submit_due_us;
+    if (g_queued_install_submit_due_us == 0 ||
+        g_pending_install_poll_due_us < g_queued_install_submit_due_us)
+      return g_pending_install_poll_due_us;
     return g_queued_install_submit_due_us;
+  }
 
   uint64_t next_wake_us = next_pending_install_timeout_us();
 
@@ -367,10 +426,10 @@ static void log_batch_submit_retry_limit(const pending_install_entry_t *entry) {
 }
 
 static int count_queued_installs(void) {
-  int queued_count =
-      atomic_load_explicit(&g_tracked_install_count, memory_order_acquire) -
-      g_submitted_install_count;
-  return queued_count > 0 ? queued_count : 0;
+  int queued_count = 0;
+  for (int i = 0; i < MAX_PENDING; ++i)
+    queued_count += g_pending_installs[i].state == INSTALL_TRACK_QUEUED;
+  return queued_count;
 }
 
 static void log_queued_install_batch(void) {

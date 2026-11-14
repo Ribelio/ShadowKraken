@@ -388,26 +388,27 @@ static void end_fpkg_cache_cleanup(void *ctx) {
   sm_shellcore_end_external_mutation();
 }
 
-void sm_install_release_replaced_fpkg_generation(
+bool sm_install_release_replaced_fpkg_generation(
     const char *title_id, const char *previous_generation_name,
     const char *current_path) {
   if (!title_id || !previous_generation_name ||
       !previous_generation_name[0] || !current_path || !current_path[0])
-    return;
+    return true;
   char previous_path[MAX_PATH];
   int path_length = snprintf(previous_path, sizeof(previous_path), "%s/%s/%s",
                              SM_FPKG_CACHE_DEFAULT_ROOT, title_id,
                              previous_generation_name);
   if (path_length < 0 || (size_t)path_length >= sizeof(previous_path))
-    return;
+    return false;
   if (strcmp(previous_path, current_path) == 0)
-    return;
+    return true;
   sm_fpkg_status_t status = sm_fpkg_cache_remove_generation(
       SM_FPKG_CACHE_DEFAULT_ROOT, title_id, previous_generation_name,
       begin_fpkg_cache_cleanup, end_fpkg_cache_cleanup, NULL);
   if (status != SM_FPKG_OK && status != SM_FPKG_CANCELLED)
     log_debug("  [FPKG] old cache retained: title=%s path=%s status=%d",
               title_id, previous_path, (int)status);
+  return status == SM_FPKG_OK;
 }
 
 // --- Install/Remount Action ---
@@ -469,9 +470,25 @@ static bool mount_and_install(const char *src_path, const char *title_id,
     return false;
   }
 
-  if (is_under_image_mount_base(src_path)) {
+  const char *image_chain_source = src_path;
+  char fpkg_source_path[MAX_PATH];
+  if (path_matches_root_or_child(src_path,
+                                 SM_FPKG_CACHE_DEFAULT_ROOT)) {
+    sm_fpkg_cache_generation_info_t generation_info;
+    if (sm_fpkg_cache_read_generation_info(
+            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, src_path,
+            &generation_info) != SM_FPKG_OK ||
+        !generation_info.source_matches_snapshot) {
+      errno = ESTALE;
+      return false;
+    }
+    (void)strlcpy(fpkg_source_path, generation_info.source_path,
+                  sizeof(fpkg_source_path));
+    image_chain_source = fpkg_source_path;
+  }
+  if (is_under_image_mount_base(image_chain_source)) {
     image_source_count = resolve_image_source_chain_from_mount_cache(
-        src_path, image_source_chain);
+        image_chain_source, image_source_chain);
     has_image_source = image_source_count > 0;
     if (!has_image_source) {
       log_debug("  [LINK] image source lookup failed for %s: %s", title_id,

@@ -2,8 +2,11 @@
  * Kraken Mount and pinned ampr-emu-ng v0.4.0 format implementations. */
 #include "sm_fpkg_index.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define IDX_MAGIC "AMPRIDX3"
 #define IDX_HEADER 0x30u
@@ -45,6 +48,13 @@ typedef struct {
 static uint32_t read_le32(const uint8_t *p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
          ((uint32_t)p[3] << 24);
+}
+
+static uint64_t read_le64(const uint8_t *p) {
+  uint64_t value = 0;
+  for (unsigned i = 0; i < 8; ++i)
+    value |= (uint64_t)p[i] << (i * 8u);
+  return value;
 }
 
 static void put_le32(uint8_t *p, uint32_t v) {
@@ -184,6 +194,304 @@ static uint32_t crc32_bytes(const uint8_t *bytes, size_t len) {
                            (uint32_t)-(int32_t)(crc & 1u));
   }
   return ~crc;
+}
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *bytes, size_t len) {
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= bytes[i];
+    for (unsigned bit = 0; bit < 8; ++bit)
+      crc = (crc >> 1) ^ (UINT32_C(0xedb88320) &
+                           (uint32_t)-(int32_t)(crc & 1u));
+  }
+  return crc;
+}
+
+static bool read_exact_at(int fd, uint64_t offset, void *buffer, size_t size) {
+  if (offset > (uint64_t)INT64_MAX || size > (uint64_t)INT64_MAX - offset)
+    return false;
+  uint8_t *bytes = buffer;
+  size_t done = 0;
+  while (done < size) {
+    ssize_t count = pread(fd, bytes + done, size - done,
+                          (off_t)(offset + done));
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0)
+      return false;
+    done += (size_t)count;
+  }
+  return true;
+}
+
+static bool validate_idx_fd(int fd, uint64_t file_size) {
+  uint8_t header[IDX_HEADER];
+  if (file_size < sizeof(header) || !read_exact_at(fd, 0, header,
+                                                   sizeof(header)) ||
+      memcmp(header, IDX_MAGIC, 8) != 0 || read_le32(header + 8) != 3u ||
+      read_le32(header + 12) != IDX_RECORD)
+    return false;
+  uint64_t count = read_le64(header + 16);
+  uint64_t path_bytes = read_le64(header + 24);
+  uint64_t slots_offset = read_le64(header + 32);
+  uint32_t slot_size = read_le32(header + 40);
+  uint32_t slot_count = read_le32(header + 44);
+  uint64_t records_size;
+  if (count == 0 || count > MAX_INDEX_FILES ||
+      path_bytes > MAX_INDEX_PATH_BYTES ||
+      slot_size != IDX_SLOT || slot_count < 2u ||
+      (slot_count & (slot_count - 1u)) != 0 ||
+      (uint64_t)slot_count < count * 2u ||
+      count > UINT64_MAX / IDX_RECORD)
+    return false;
+  records_size = count * IDX_RECORD;
+  if (records_size > UINT64_MAX - IDX_HEADER ||
+      path_bytes > UINT64_MAX - IDX_HEADER - records_size)
+    return false;
+  uint64_t payload_end = IDX_HEADER + records_size + path_bytes;
+  uint64_t slots_size = (uint64_t)slot_count * IDX_SLOT;
+  if (slots_offset < payload_end || (slots_offset & (IDX_SLOT - 1u)) != 0 ||
+      slots_size > UINT64_MAX - slots_offset ||
+      slots_offset + slots_size != file_size)
+    return false;
+  uint8_t padding[IDX_SLOT - 1u];
+  size_t padding_size = (size_t)(slots_offset - payload_end);
+  if (padding_size > sizeof(padding) ||
+      (padding_size &&
+       !read_exact_at(fd, payload_end, padding, padding_size)))
+    return false;
+  for (size_t i = 0; i < padding_size; ++i)
+    if (padding[i] != 0)
+      return false;
+
+  uint8_t record[IDX_RECORD];
+  for (uint64_t i = 0; i < count; ++i) {
+    if (!read_exact_at(fd, IDX_HEADER + i * IDX_RECORD, record,
+                       sizeof(record)))
+      return false;
+    uint32_t path_at = read_le32(record);
+    uint32_t path_length = read_le32(record + 4);
+    if (path_length == 0 || path_length > MAX_PATH_BYTES ||
+        path_at > path_bytes || (uint64_t)path_length + 1u >
+                                    path_bytes - path_at)
+      return false;
+    char path[MAX_PATH_BYTES + 1u];
+    if (!read_exact_at(fd, IDX_HEADER + records_size + path_at, path,
+                       (size_t)path_length + 1u) ||
+        path[path_length] != '\0' ||
+        memchr(path, '\0', path_length) != NULL || path_length < 7u ||
+        memcmp(path, "/app0/", 6u) != 0)
+      return false;
+  }
+
+  uint8_t *seen_records = calloc((size_t)count + 1u, 1u);
+  if (!seen_records)
+    return false;
+  uint32_t used = 0;
+  uint8_t slot[IDX_SLOT];
+  for (uint32_t i = 0; i < slot_count; ++i) {
+    if (!read_exact_at(fd, slots_offset + (uint64_t)i * IDX_SLOT, slot,
+                       sizeof(slot))) {
+      free(seen_records);
+      return false;
+    }
+    uint64_t hash = read_le64(slot);
+    uint32_t record_plus_one = read_le32(slot + 8);
+    uint32_t flags = read_le32(slot + 12);
+    if (record_plus_one == 0) {
+      if (hash != 0 || flags != 0) {
+        free(seen_records);
+        return false;
+      }
+      continue;
+    }
+    if (record_plus_one > count || hash == 0 ||
+        (flags & ~IDX_SLOT_SHARED) != 0 || seen_records[record_plus_one]) {
+      free(seen_records);
+      return false;
+    }
+    uint32_t probe = (uint32_t)hash & (slot_count - 1u);
+    while (probe != i) {
+      uint8_t previous_slot[IDX_SLOT];
+      if (!read_exact_at(fd, slots_offset + (uint64_t)probe * IDX_SLOT,
+                         previous_slot, sizeof(previous_slot)) ||
+          read_le32(previous_slot + 8) == 0) {
+        free(seen_records);
+        return false;
+      }
+      probe = (probe + 1u) & (slot_count - 1u);
+    }
+    uint8_t record[IDX_RECORD];
+    uint64_t record_offset = IDX_HEADER +
+                             (uint64_t)(record_plus_one - 1u) * IDX_RECORD;
+    if (!read_exact_at(fd, record_offset, record, sizeof(record))) {
+      free(seen_records);
+      return false;
+    }
+    uint32_t path_at = read_le32(record);
+    uint32_t path_length = read_le32(record + 4);
+    char path[MAX_PATH_BYTES + 1u];
+    if (path_length == 0 || path_length > MAX_PATH_BYTES ||
+        path_at > path_bytes || (uint64_t)path_length + 1u >
+                                    path_bytes - path_at ||
+        !read_exact_at(fd, IDX_HEADER + records_size + path_at, path,
+                       (size_t)path_length + 1u) ||
+        idx_hash(path, path_length) != hash) {
+      free(seen_records);
+      return false;
+    }
+    seen_records[record_plus_one] = 1u;
+    ++used;
+  }
+  bool all_seen = used == count;
+  for (uint64_t i = 1; all_seen && i <= count; ++i)
+    all_seen = seen_records[i] != 0;
+  free(seen_records);
+  return all_seen;
+}
+
+static bool validate_pak_fd(int fd, uint64_t file_size) {
+  uint8_t header[PAK_HEADER];
+  if (file_size < sizeof(header) || !read_exact_at(fd, 0, header,
+                                                   sizeof(header)) ||
+      memcmp(header, PAK_MAGIC, 8) != 0 || read_le32(header + 8) != 4u ||
+      read_le32(header + 12) != PAK_HEADER ||
+      read_le32(header + 20) != PAK_ENDIAN ||
+      read_le32(header + 56) != 1u ||
+      read_le32(header + 60) != PAK_FILE_RECORD ||
+      read_le32(header + 64) != PAK_CHUNK_RECORD ||
+      read_le32(header + 68) != PAK_PACK_RECORD)
+    return false;
+  uint64_t file_count = read_le64(header + 40);
+  uint64_t chunk_count = read_le64(header + 48);
+  uint64_t files_at = read_le64(header + 72);
+  uint64_t chunks_at = read_le64(header + 80);
+  uint64_t pack_at = read_le64(header + 88);
+  uint64_t strings_at = read_le64(header + 96);
+  uint64_t strings_size = read_le64(header + 104);
+  if (file_count == 0 || file_count > MAX_INDEX_FILES ||
+      chunk_count > MAX_INDEX_CHUNKS ||
+      files_at != PAK_HEADER ||
+      file_count > (UINT64_MAX - files_at) / PAK_FILE_RECORD ||
+      chunks_at != files_at + file_count * PAK_FILE_RECORD ||
+      chunk_count > (UINT64_MAX - chunks_at) / PAK_CHUNK_RECORD ||
+      pack_at != chunks_at + chunk_count * PAK_CHUNK_RECORD ||
+      pack_at > UINT64_MAX - PAK_PACK_RECORD ||
+      strings_at != pack_at + PAK_PACK_RECORD ||
+      strings_size > UINT64_MAX - strings_at ||
+      strings_at + strings_size != file_size)
+    return false;
+
+  uint8_t pack[PAK_PACK_RECORD];
+  if (!read_exact_at(fd, pack_at, pack, sizeof(pack)) ||
+      read_le64(pack) == 0 || read_le64(pack + 8) < read_le64(pack) ||
+      read_le32(pack + 24) != PAK_PACK_IO_PAGE_LAYOUT ||
+      read_le32(pack + 28) != PAK_PAGE)
+    return false;
+  uint32_t pack_name_at = read_le32(pack + 16);
+  uint32_t pack_name_size = read_le32(pack + 20);
+  if ((uint64_t)pack_name_at + pack_name_size + 1u > strings_size ||
+      pack_name_size != sizeof("kraken.pkg") - 1u)
+    return false;
+  char pack_name[sizeof("kraken.pkg")];
+  if (!read_exact_at(fd, strings_at + pack_name_at, pack_name,
+                     sizeof(pack_name)) ||
+      memcmp(pack_name, "kraken.pkg", sizeof(pack_name)) != 0)
+    return false;
+
+  uint8_t file_record[PAK_FILE_RECORD];
+  for (uint64_t i = 0; i < file_count; ++i) {
+    if (!read_exact_at(fd, files_at + i * PAK_FILE_RECORD, file_record,
+                       sizeof(file_record)))
+      return false;
+    uint32_t first_chunk = read_le32(file_record + 24);
+    uint32_t file_chunks = read_le32(file_record + 28);
+    uint32_t path_at = read_le32(file_record + 32);
+    uint32_t path_length = read_le32(file_record + 36);
+    if (first_chunk > chunk_count || file_chunks > chunk_count - first_chunk ||
+        path_length == 0 || path_length > MAX_PATH_BYTES ||
+        (uint64_t)path_at + path_length + 1u > strings_size)
+      return false;
+    char path[MAX_PATH_BYTES + 1u];
+    if (!read_exact_at(fd, strings_at + path_at, path,
+                       (size_t)path_length + 1u) ||
+        path[path_length] != '\0' || memchr(path, '\0', path_length) != NULL ||
+        pak_hash(path, path_length) != read_le64(file_record))
+      return false;
+  }
+
+  uint32_t expected_header_crc = read_le32(header + PAK_HEADER_CRC_AT);
+  memset(header + PAK_HEADER_CRC_AT, 0, 4u);
+  if (crc32_bytes(header, sizeof(header)) != expected_header_crc)
+    return false;
+  uint8_t chunk[64u * 1024u];
+  uint64_t offset = PAK_HEADER;
+  uint32_t crc = UINT32_MAX;
+  while (offset < file_size) {
+    size_t amount = file_size - offset > sizeof(chunk)
+                        ? sizeof(chunk)
+                        : (size_t)(file_size - offset);
+    if (!read_exact_at(fd, offset, chunk, amount))
+      return false;
+    crc = crc32_update(crc, chunk, amount);
+    offset += amount;
+  }
+  return ~crc == read_le32(header + PAK_PAYLOAD_CRC_AT);
+}
+
+bool sm_fpkg_index_validate_fd(int fd, bool manifest) {
+  if (fd < 0)
+    return false;
+  struct stat st;
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0)
+    return false;
+  uint64_t file_size = (uint64_t)st.st_size;
+  return manifest ? validate_pak_fd(fd, file_size)
+                   : validate_idx_fd(fd, file_size);
+}
+
+bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd) {
+  if (!sm_fpkg_index_validate_fd(index_fd, false) ||
+      !sm_fpkg_index_validate_fd(manifest_fd, true))
+    return false;
+  uint8_t index_header[IDX_HEADER], manifest_header[PAK_HEADER];
+  if (!read_exact_at(index_fd, 0, index_header, sizeof(index_header)) ||
+      !read_exact_at(manifest_fd, 0, manifest_header,
+                     sizeof(manifest_header)))
+    return false;
+  uint64_t count = read_le64(index_header + 16);
+  if (count != read_le64(manifest_header + 40))
+    return false;
+  uint64_t index_paths_at = IDX_HEADER + count * IDX_RECORD;
+  uint64_t manifest_files_at = read_le64(manifest_header + 72);
+  uint64_t manifest_strings_at = read_le64(manifest_header + 96);
+  uint8_t index_record[IDX_RECORD], manifest_record[PAK_FILE_RECORD];
+  for (uint64_t i = 0; i < count; ++i) {
+    if (!read_exact_at(index_fd, IDX_HEADER + i * IDX_RECORD, index_record,
+                       sizeof(index_record)) ||
+        !read_exact_at(manifest_fd,
+                       manifest_files_at + i * PAK_FILE_RECORD,
+                       manifest_record, sizeof(manifest_record)))
+      return false;
+    uint32_t index_path_at = read_le32(index_record);
+    uint32_t index_path_length = read_le32(index_record + 4);
+    uint32_t manifest_path_at = read_le32(manifest_record + 32);
+    uint32_t manifest_path_length = read_le32(manifest_record + 36);
+    if (index_path_length != manifest_path_length ||
+        read_le64(index_record + 8) != read_le64(manifest_record + 8) ||
+        read_le64(index_record + 16) != read_le64(manifest_record + 16))
+      return false;
+    char index_path[MAX_PATH_BYTES + 1u];
+    char manifest_path[MAX_PATH_BYTES + 1u];
+    if (!read_exact_at(index_fd, index_paths_at + index_path_at, index_path,
+                       (size_t)index_path_length + 1u) ||
+        !read_exact_at(manifest_fd,
+                       manifest_strings_at + manifest_path_at,
+                       manifest_path, (size_t)manifest_path_length + 1u) ||
+        memcmp(index_path, manifest_path,
+               (size_t)index_path_length + 1u) != 0)
+      return false;
+  }
+  return true;
 }
 
 static uint32_t crc32_parts(const uint8_t *a, size_t a_len,

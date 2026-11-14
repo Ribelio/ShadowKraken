@@ -48,4 +48,10 @@ sm_fpkg_status_t sm_fpkg_index_build_package(
     sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out);
 void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob);
 
+/* Validate the bounded AMPRIDX3 or AMPRPAK4 layout in an already-open file.
+ * AMPRIDX3 has no checksum field; its offsets, records and hash slots are
+ * checked structurally. AMPRPAK4 header and payload CRCs are verified. */
+bool sm_fpkg_index_validate_fd(int fd, bool manifest);
+bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd);
+
 #endif

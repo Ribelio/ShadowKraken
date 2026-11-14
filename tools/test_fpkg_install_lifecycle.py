@@ -38,6 +38,7 @@ bool wait_for_stability_fast(const char *path, const char *name);
 """
     scan = functions(root, "src/sm_scan.c", [
         "find_scan_candidate_index_by_title_id", "mark_scan_candidate_manual",
+        "remove_scan_candidate_at",
         "notify_duplicate_scan_candidate", "defer_full_candidate_batch",
         "is_blocked_ppsa_title", "try_collect_candidate_for_fpkg",
         "is_native_fpkg_path"])
@@ -46,7 +47,8 @@ bool wait_for_stability_fast(const char *path, const char *name);
         "append_install_path_component",
         "sm_install_register_title_dir", "mount_and_install"])
     fakelib = functions(root, "src/sm_fakelib.c", [
-        "resolve_fpkg_source_directory", "mount_fpkg_source_directory",
+        "restore_fpkg_source_image_chain", "resolve_fpkg_source_directory",
+        "mount_fpkg_source_directory",
         "has_fpkg_sandbox_layer", "mount_fpkg_source_if_needed"])
     with tempfile.TemporaryDirectory(prefix="sm-fpkg-install-lifecycle-") as directory:
         build = Path(directory)

@@ -237,7 +237,7 @@ static int install_bundled_runtime(const char *fallback_root,
   if (fd < 0)
     return -1;
 
-  bool staged = fchmod(fd, 0777) == 0 &&
+  bool staged = fchmod(fd, 0755) == 0 &&
                 write_all(fd, sm_ampr_ng_runtime, sm_ampr_ng_runtime_len) &&
                 fsync(fd) == 0;
   int saved_errno = errno;

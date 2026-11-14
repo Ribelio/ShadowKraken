@@ -12,13 +12,17 @@ The standalone FPKG envelope, outer-metadata and AMPR index checks are also run
 by the Linux PS5 build workflow. Run them locally with:
 
 ```sh
-clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
-  tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test
+  tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c \
+  src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c \
+  src/sm_fpkg_index.c -o /tmp/sm-fpkg-header-test
 /tmp/sm-fpkg-header-test
-clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
-  tests/test_fpkg_index.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-index-test
+  tests/test_fpkg_index.c src/sm_fpkg_index.c src/sm_fpkg.c \
+  src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c \
+  src/sm_fpkg_tree.c -o /tmp/sm-fpkg-index-test
 /tmp/sm-fpkg-index-test
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -48,11 +52,13 @@ ownership-aware cleanup and quarantine:
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
   -include tests/host_platform.h \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
-  tests/test_fpkg_cache.c src/sm_fpkg_cache.c -o /tmp/sm-fpkg-cache-test
+  tests/test_fpkg_cache.c src/sm_fpkg_cache.c src/sm_fpkg_index.c \
+  -o /tmp/sm-fpkg-cache-test
 /tmp/sm-fpkg-cache-test
 ```
 
-It uses synthetic cache records and does not open an FPKG fixture.
+It uses synthetic cache records and generated AMPR indexes, verifies damaged
+index rejection without a size change, and does not open an FPKG fixture.
 
 The AMPR runtime selector verifies the distinct NG runtime path, scans across
 read boundaries, preserves a selected custom runtime, installs the pinned

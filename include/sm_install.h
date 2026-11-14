@@ -13,7 +13,7 @@ bool sm_install_register_title_dir(const char *title_id,
 
 // Release a superseded native FPKG cache only after registration succeeds.
 // previous_generation_name is a validated cache generation basename.
-void sm_install_release_replaced_fpkg_generation(
+bool sm_install_release_replaced_fpkg_generation(
     const char *title_id, const char *previous_generation_name,
     const char *current_path);
 

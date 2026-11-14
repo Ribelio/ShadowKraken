@@ -1146,8 +1146,31 @@ static bool validate_generation_owned_tree(int generation_fd,
       }
     }
   }
+  int index_fd = openat(generation_fd, "ampr_emu.index",
+                        O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat index_st;
+  bool index_valid = index_fd >= 0 && fstat(index_fd, &index_st) == 0 &&
+                     S_ISREG(index_st.st_mode) &&
+                     index_st.st_uid == geteuid() && index_st.st_nlink == 1 &&
+                     (index_st.st_mode & 0022) == 0;
+  int manifest_fd = openat(generation_fd, "ampr_assets.index",
+                           O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  struct stat manifest_st;
+  bool manifest_valid = manifest_fd >= 0 &&
+                        fstat(manifest_fd, &manifest_st) == 0 &&
+                        S_ISREG(manifest_st.st_mode) &&
+                        manifest_st.st_uid == geteuid() &&
+                        manifest_st.st_nlink == 1 &&
+                        (manifest_st.st_mode & 0022) == 0;
+  bool indexes_valid = index_valid && manifest_valid &&
+                       sm_fpkg_index_validate_pair_fds(index_fd,
+                                                       manifest_fd);
+  if (index_fd >= 0)
+    close(index_fd);
+  if (manifest_fd >= 0)
+    close(manifest_fd);
   owned_tree_check_t check = {.manifest = &manifest};
-  bool valid = source_valid && image_valid &&
+  bool valid = source_valid && image_valid && indexes_valid &&
                validate_owned_cache_tree(generation_fd, "", 0u, &check) &&
                check.built_seen && check.done_seen && check.journal_seen &&
                check.kraken_seen &&
@@ -1597,6 +1620,11 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   }
   status = read_generation_identity(title_fd, generation_name, title_id, true,
                                     &generation_fd, NULL);
+  if (status == SM_FPKG_UNSUPPORTED && errno == ENOENT) {
+    /* Cleanup is idempotent after a crash or a concurrent prior cleanup. */
+    status = SM_FPKG_OK;
+    goto cleanup;
+  }
   if (status != SM_FPKG_OK)
     goto cleanup;
   status = parse_owned_cache_manifest(generation_fd, &manifest);
@@ -1747,11 +1775,9 @@ static sm_fpkg_status_t write_active_generation(
   if (status == SM_FPKG_OK) {
     int rename_result = had_active
                             ? renameat(title_fd, temporary, title_fd, "active")
-                            : linkat(title_fd, temporary, title_fd, "active",
-                                     0);
+                            : rename_noreplace(title_fd, temporary, title_fd,
+                                               "active");
     if (rename_result != 0)
-      status = SM_FPKG_IO;
-    else if (!had_active && unlinkat(title_fd, temporary, 0) != 0)
       status = SM_FPKG_IO;
   }
   if (status == SM_FPKG_OK && fsync(title_fd) != 0)

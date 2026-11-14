@@ -25,26 +25,6 @@ int sm_fpkg_source_fd(const sm_fpkg_t *fpkg) {
   return -1;
 }
 
-sm_fpkg_status_t sm_fpkg_index_build_package(
-    const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract,
-    void *extract_ctx, int64_t timestamp, sm_fpkg_index_blob_t *index_out,
-    sm_fpkg_index_blob_t *manifest_out) {
-  (void)fpkg;
-  (void)should_extract;
-  (void)extract_ctx;
-  (void)timestamp;
-  (void)index_out;
-  (void)manifest_out;
-  return SM_FPKG_UNSUPPORTED;
-}
-
-void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob) {
-  if (!blob)
-    return;
-  free(blob->data);
-  memset(blob, 0, sizeof(*blob));
-}
-
 size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg) {
   (void)fpkg;
   return 0;
@@ -66,6 +46,33 @@ sm_fpkg_status_t sm_fpkg_extract_file(sm_fpkg_t *fpkg, size_t index,
   return SM_FPKG_UNSUPPORTED;
 }
 
+uint64_t sm_fpkg_package_size(const sm_fpkg_t *fpkg) {
+  (void)fpkg;
+  return 0;
+}
+
+sm_fpkg_status_t sm_fpkg_file_block_count(const sm_fpkg_t *fpkg, size_t index,
+                                          size_t *count_out) {
+  (void)fpkg;
+  (void)index;
+  if (count_out)
+    *count_out = 0;
+  return SM_FPKG_UNSUPPORTED;
+}
+
+sm_fpkg_status_t sm_fpkg_file_blocks(const sm_fpkg_t *fpkg, size_t index,
+                                     sm_fpkg_block_t *blocks,
+                                     size_t block_capacity,
+                                     size_t *count_out) {
+  (void)fpkg;
+  (void)index;
+  (void)blocks;
+  (void)block_capacity;
+  if (count_out)
+    *count_out = 0;
+  return SM_FPKG_UNSUPPORTED;
+}
+
 static void write_all_test(int fd, const char *bytes, size_t size) {
   size_t done = 0;
   while (done < size) {
@@ -83,6 +90,23 @@ static void write_at(int directory_fd, const char *name, const char *contents,
                   mode);
   assert(fd >= 0);
   write_all_test(fd, contents, strlen(contents));
+  assert(close(fd) == 0);
+}
+
+static void write_at_bytes(int directory_fd, const char *name,
+                           const void *contents, size_t size, mode_t mode) {
+  int fd = openat(directory_fd, name,
+                  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                  mode);
+  assert(fd >= 0);
+  const uint8_t *bytes = contents;
+  size_t done = 0;
+  while (done < size) {
+    ssize_t count = write(fd, bytes + done, size - done);
+    assert(count > 0);
+    done += (size_t)count;
+  }
+  assert(fsync(fd) == 0);
   assert(close(fd) == 0);
 }
 
@@ -113,8 +137,14 @@ static int make_generation(int title_fd, const char *name, uint64_t inode) {
   assert(system_fd >= 0);
   write_at(system_fd, "param.json", "meta", 0644);
   assert(close(system_fd) == 0);
-  write_at(generation_fd, "ampr_emu.index", "idx", 0644);
-  write_at(generation_fd, "ampr_assets.index", "pak", 0644);
+  sm_fpkg_index_file_t index_file = {.path = "eboot.bin", .size = 4};
+  sm_fpkg_index_blob_t index = {0}, manifest = {0};
+  assert(sm_fpkg_index_build(&index_file, 1, 3, 4, &index, &manifest) ==
+         SM_FPKG_OK);
+  write_at_bytes(generation_fd, "ampr_emu.index", index.data, index.size,
+                 0644);
+  write_at_bytes(generation_fd, "ampr_assets.index", manifest.data,
+                 manifest.size, 0644);
   const char link_contents[] = "kraken/synthetic.pkg\n";
   write_at(generation_fd, "kraken.image", link_contents, 0644);
 
@@ -129,9 +159,10 @@ static int make_generation(int title_fd, const char *name, uint64_t inode) {
       "fingerprint=%s\ndevice=1\ninode=%llu\nsize=3\n"
       "mtime=4.000000000\nctime=5.000000000\n"
       "file=4:eboot.bin\nfile=4:sce_sys/param.json\n"
-      "file=3:ampr_emu.index\nfile=3:ampr_assets.index\n"
+      "file=%zu:ampr_emu.index\nfile=%zu:ampr_assets.index\n"
       "file=%zu:kraken.image\n",
       TEST_TITLE_ID, fingerprint, (unsigned long long)inode,
+      index.size, manifest.size,
       sizeof(link_contents) - 1u);
   assert(built_length > 0 && (size_t)built_length < sizeof(built));
   write_at(generation_fd, ".built", built, 0600);
@@ -147,6 +178,8 @@ static int make_generation(int title_fd, const char *name, uint64_t inode) {
   write_at(generation_fd, ".done", done, 0600);
   write_at(generation_fd, ".journal",
            "SM-FPKG-JOURNAL-1\nstate=published\n", 0600);
+  sm_fpkg_index_blob_free(&index);
+  sm_fpkg_index_blob_free(&manifest);
   assert(fsync(generation_fd) == 0);
   return generation_fd;
 }
@@ -263,6 +296,29 @@ int main(void) {
   assert(strcmp(generation_info.source_path, TEST_SOURCE_PATH) == 0);
   assert(strcmp(generation_info.generation_path, current_generation) == 0);
   assert(!generation_info.source_matches_snapshot);
+
+  int damaged_generation_fd = openat(
+      title_fd, active_name,
+      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  assert(damaged_generation_fd >= 0);
+  int damaged_index_fd = openat(damaged_generation_fd, "ampr_emu.index",
+                                O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+  assert(damaged_index_fd >= 0);
+  uint8_t original_size = 0;
+  assert(pread(damaged_index_fd, &original_size, 1, 56) == 1);
+  uint8_t damaged_size = (uint8_t)(original_size + 1u);
+  assert(pwrite(damaged_index_fd, &damaged_size, 1, 56) == 1);
+  assert(fsync(damaged_index_fd) == 0);
+  assert(sm_fpkg_cache_read_generation_info(
+             cache_root, TEST_TITLE_ID, current_generation,
+             &generation_info) != SM_FPKG_OK);
+  assert(pwrite(damaged_index_fd, &original_size, 1, 56) == 1);
+  assert(fsync(damaged_index_fd) == 0);
+  assert(close(damaged_index_fd) == 0);
+  assert(close(damaged_generation_fd) == 0);
+  assert(sm_fpkg_cache_read_generation_info(
+             cache_root, TEST_TITLE_ID, current_generation,
+             &generation_info) == SM_FPKG_OK);
 
   int orphan_fd = make_generation(title_fd, orphan_name, 9u);
   write_at(orphan_fd, "unexpected.save", "user-data", 0600);

@@ -15,6 +15,7 @@
 
 static runtime_config_t test_config = {.app_install_all_enabled = true};
 static bool app_db_has_title;
+static bool cleanup_allowed = true;
 static unsigned cleanup_calls;
 static uint64_t fake_clock = 100;
 static char cached_path[MAX_PATH];
@@ -78,13 +79,14 @@ void sm_manual_note_installed(const char *source_path, const char *title_id,
   (void)title_name;
 }
 
-void sm_install_release_replaced_fpkg_generation(
+bool sm_install_release_replaced_fpkg_generation(
     const char *title_id, const char *previous_path, const char *current_path) {
   assert(strcmp(title_id, "PPSA00001") == 0);
   assert(strcmp(previous_path, "gen-old") == 0);
   assert(strcmp(current_path,
                 "/cache/PPSA00001/gen-new") == 0);
   ++cleanup_calls;
+  return cleanup_allowed;
 }
 
 int main(void) {
@@ -98,15 +100,25 @@ int main(void) {
 
   assert(sm_install_queue_candidate(
       &candidate, false, "gen-old"));
+  assert(sm_install_queue_candidate(
+      &candidate, false, "gen-current"));
   assert(cleanup_calls == 0);
   assert(sm_install_has_pending_work());
+  assert(sm_install_next_wake_us(fake_clock) != 0);
   assert(sm_install_submit_queued());
   assert(cleanup_calls == 0);
+  assert(sm_install_has_pending_work());
 
   app_db_has_title = true;
+  cleanup_allowed = false;
   sm_install_poll_pending();
   assert(cleanup_calls == 1);
   assert(strcmp(cached_path, "/cache/PPSA00001/gen-new") == 0);
+  assert(!sm_install_has_pending_work());
+  assert(sm_install_next_wake_us(fake_clock) != 0);
+  cleanup_allowed = true;
+  sm_install_poll_pending();
+  assert(cleanup_calls == 2);
   assert(!sm_install_has_pending_work());
 
   scan_candidate_t failed_candidate = {0};
@@ -121,7 +133,7 @@ int main(void) {
   assert(sm_install_submit_queued());
   fake_clock += UINT64_C(301000000);
   sm_install_poll_pending();
-  assert(cleanup_calls == 1);
+  assert(cleanup_calls == 2);
   assert(!sm_install_has_pending_work());
   puts("async FPKG cache cleanup waits for confirmed app.db registration");
   return 0;

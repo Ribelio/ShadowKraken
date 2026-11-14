@@ -529,7 +529,11 @@ static sm_fpkg_status_t validate_outer_metadata(
       root_dir_block == uroot_dir_block ||
       root_dir_block == superblock_index || uroot_dir_block == superblock_index ||
       root_dir_block == table_block || uroot_dir_block == table_block)
+  {
+    if (status == SM_FPKG_OK)
+      status = SM_FPKG_CORRUPT;
     goto done;
+  }
   const uint8_t *files[] = {
       inode_table + (size_t)image_inode * SM_FPKG_DINODE_SIZE,
       inode_table + (size_t)layout_inode * SM_FPKG_DINODE_SIZE};

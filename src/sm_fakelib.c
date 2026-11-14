@@ -8,6 +8,7 @@
 #include "sm_filesystem.h"
 #include "sm_gameinfo.h"
 #include "sm_game_lifecycle.h"
+#include "sm_image.h"
 #include "sm_log.h"
 #include "sm_mount_diag.h"
 #include "sm_path_utils.h"
@@ -60,6 +61,7 @@ typedef struct {
   char title_id[MAX_TITLE_ID];
   char sandbox_app0_path[MAX_PATH];
   char mount_path[MAX_PATH];
+  char fpkg_generation_path[MAX_PATH];
   char fpkg_source_directory[MAX_PATH];
   bool fpkg_source_is_removable;
   // fakelib, /data, /mnt/disc, fonts, FPKG source, and created parents.
@@ -468,6 +470,28 @@ static bool title_uses_fpkg_cache(const char *title_id,
          is_fpkg_cache_generation_path(managed_path);
 }
 
+static bool restore_fpkg_source_image_chain(const char *title_id,
+                                            const char *source_path) {
+  if (!is_under_image_mount_base(source_path))
+    return true;
+  char chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
+  size_t count = 0;
+  if (!read_mount_image_chain(title_id, chain, &count) || count == 0) {
+    if (errno == 0)
+      errno = ENOENT;
+    return false;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const char *name = strrchr(chain[i], '/');
+    name = name ? name + 1 : chain[i];
+    bool unstable = false;
+    if (!maybe_mount_image_file(chain[i], name, &unstable))
+      return false;
+  }
+  struct stat source_st;
+  return stat(source_path, &source_st) == 0 && S_ISREG(source_st.st_mode);
+}
+
 static bool resolve_fpkg_source_directory(const char *title_id,
                                           const char *generation_path,
                                           char directory_out[MAX_PATH]) {
@@ -479,9 +503,26 @@ static bool resolve_fpkg_source_directory(const char *title_id,
   sm_fpkg_cache_generation_info_t info;
   if (sm_fpkg_cache_read_generation_info(
           SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
-          &info) != SM_FPKG_OK || !info.source_matches_snapshot) {
+          &info) != SM_FPKG_OK) {
     errno = ESTALE;
     return false;
+  }
+  if (!info.source_matches_snapshot) {
+    if (!is_under_image_mount_base(info.source_path)) {
+      errno = ESTALE;
+      return false;
+    }
+    if (!restore_fpkg_source_image_chain(title_id, info.source_path)) {
+      if (errno == 0)
+        errno = ENOENT;
+      return false;
+    }
+    if (sm_fpkg_cache_read_generation_info(
+            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
+            &info) != SM_FPKG_OK || !info.source_matches_snapshot) {
+      errno = ESTALE;
+      return false;
+    }
   }
   const char *extension = strrchr(info.source_path, '.');
   if (!extension || strcasecmp(extension, ".pkg") != 0) {
@@ -543,12 +584,29 @@ static bool has_fpkg_sandbox_layer(void) {
 }
 
 static bool mount_fpkg_source_if_needed(void) {
-  if (!g_fakelib_mount.fpkg_source_directory[0] ||
-      has_fpkg_sandbox_layer())
+  if (!g_fakelib_mount.fpkg_source_directory[0])
+    return true;
+  char generation_path[MAX_PATH];
+  char source_directory[MAX_PATH];
+  if (!read_mount_link(g_fakelib_mount.title_id, generation_path,
+                       sizeof(generation_path)))
+    return false;
+  if (strcmp(generation_path, g_fakelib_mount.fpkg_generation_path) != 0) {
+    errno = ESTALE;
+    return false;
+  }
+  if (!resolve_fpkg_source_directory(g_fakelib_mount.title_id,
+                                     generation_path, source_directory))
+    return false;
+  if (strcmp(source_directory, g_fakelib_mount.fpkg_source_directory) != 0) {
+    errno = ESTALE;
+    return false;
+  }
+  if (has_fpkg_sandbox_layer())
     return true;
   return mount_fpkg_source_directory(
       g_fakelib_mount.title_id, g_fakelib_mount.sandbox_app0_path,
-      g_fakelib_mount.fpkg_source_directory);
+      source_directory);
 }
 
 static bool remove_fpkg_sandbox_layers_for_root(const char *source_root,
@@ -1731,6 +1789,9 @@ static bool compute_cache_context_signatures(
                                 &context->global_signature)) {
     return false;
   }
+  memset(&context->emulator_files_signature, 0,
+         sizeof(context->emulator_files_signature));
+  context->emulator_file_count = 0;
   if (context->emulators_path[0] != '\0' &&
       !compute_emulator_files_signature(
           context->emulators_path, context->game_path,
@@ -2545,6 +2606,9 @@ static bool mount_fakelib_for_game_locked(pid_t pid, const char *title_id,
   g_fakelib_mount.pid = pid;
   (void)strlcpy(g_fakelib_mount.title_id, title_id,
                 sizeof(g_fakelib_mount.title_id));
+  if (fpkg_source)
+    (void)strlcpy(g_fakelib_mount.fpkg_generation_path, managed_game_path,
+                  sizeof(g_fakelib_mount.fpkg_generation_path));
   (void)strlcpy(g_fakelib_mount.sandbox_app0_path, sandbox_app0_path,
                 sizeof(g_fakelib_mount.sandbox_app0_path));
   (void)strlcpy(g_fakelib_mount.mount_path, mount_path,

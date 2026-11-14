@@ -807,6 +807,10 @@ static bool try_collect_candidate_for_fpkg(
     if (manual_source_path)
       sm_manual_note_installed(manual_source_path, package_info.title_id,
                                package_info.title_name);
+    int queued_candidate = find_scan_candidate_index_by_title_id(
+        candidates, *candidate_count, package_info.title_id);
+    if (queued_candidate >= 0)
+      remove_scan_candidate_at(candidates, candidate_count, queued_candidate);
     return true;
   }
 
@@ -822,6 +826,10 @@ static bool try_collect_candidate_for_fpkg(
                                     tracked_path);
     cache_game_entry(tracked_path, package_info.title_id,
                      package_info.title_name);
+    int queued_candidate = find_scan_candidate_index_by_title_id(
+        candidates, *candidate_count, package_info.title_id);
+    if (queued_candidate >= 0)
+      remove_scan_candidate_at(candidates, candidate_count, queued_candidate);
     return true;
   }
 

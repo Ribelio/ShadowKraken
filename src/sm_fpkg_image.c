@@ -84,6 +84,7 @@ static sm_fpkg_status_t decode_block(sm_fpkg_image_reader_t *reader,
       reader, block->stored_offset, reader->stored, block->stored_length);
   if (status != SM_FPKG_OK)
     return status;
+  reader->cached_block = SIZE_MAX;
   status = sm_fpkg_decode_block(reader->decoder, reader->stored,
                                 block->stored_length, block->even_length,
                                 block->mode, reader->decoded,

@@ -398,6 +398,37 @@ static bool prepare_image_source(const char *title_id,
   return false;
 }
 
+static bool restore_cached_fpkg_source(const char *title_id,
+                                       const char *generation_path) {
+  if (!sm_config_fpkg_direct_mount_enabled())
+    return false;
+  sm_fpkg_cache_generation_info_t info;
+  if (sm_fpkg_cache_read_generation_info(
+          SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
+          &info) != SM_FPKG_OK)
+    return false;
+  if (!info.source_matches_snapshot &&
+      is_under_image_mount_base(info.source_path)) {
+    char chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
+    size_t count = 0;
+    if (!read_mount_image_chain(title_id, chain, &count) || count == 0 ||
+        !path_exists(chain[0]))
+      return false;
+    for (size_t i = 0; i < count; ++i) {
+      const char *name = strrchr(chain[i], '/');
+      name = name ? name + 1 : chain[i];
+      bool unstable = false;
+      if (!maybe_mount_image_file_with_mode(chain[i], name, &unstable, NULL))
+        return false;
+    }
+    if (sm_fpkg_cache_read_generation_info(
+            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
+            &info) != SM_FPKG_OK)
+      return false;
+  }
+  return info.source_matches_snapshot;
+}
+
 static bool resumed_runtime_source_ready(const char *title_id,
                                          char runtime_source[MAX_PATH]) {
   char refreshed_source[MAX_PATH];
@@ -408,6 +439,11 @@ static bool resumed_runtime_source_ready(const char *title_id,
               runtime_source);
   }
 
+  if (path_matches_root_or_child(runtime_source,
+                                 SM_FPKG_CACHE_DEFAULT_ROOT)) {
+    return restore_cached_fpkg_source(title_id, runtime_source) &&
+           directory_has_game_executable(runtime_source);
+  }
   if (is_usb_storage_path(runtime_source))
     return directory_has_game_executable(runtime_source);
   if (!is_under_image_mount_base(runtime_source))
