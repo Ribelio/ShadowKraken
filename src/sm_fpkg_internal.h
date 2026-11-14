@@ -3,6 +3,8 @@
 
 #include "sm_fpkg.h"
 
+#include <stdbool.h>
+
 typedef struct {
   uint64_t logical_offset;
   uint64_t stored_offset;
@@ -22,6 +24,18 @@ typedef struct {
 typedef struct sm_fpkg_image_reader sm_fpkg_image_reader_t;
 typedef sm_fpkg_status_t (*sm_fpkg_mount_read_fn)(void *ctx, uint64_t offset,
                                                    void *output, size_t size);
+
+typedef struct {
+  char *path;
+  uint64_t size;
+  uint64_t logical_offset;
+  bool is_dir;
+} sm_fpkg_tree_entry_t;
+
+typedef struct {
+  sm_fpkg_tree_entry_t *entries;
+  size_t count;
+} sm_fpkg_tree_t;
 
 /* Parse a bounded naps_pkg_layout.dat image for pfs_image.dat of image_size. */
 sm_fpkg_status_t sm_fpkg_layout_parse(const uint8_t *descriptor,
@@ -45,5 +59,9 @@ sm_fpkg_status_t sm_fpkg_image_read(sm_fpkg_image_reader_t *reader,
 sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
                                        void *read_ctx, uint64_t mount_size,
                                        uint64_t meta_base);
+sm_fpkg_status_t sm_fpkg_tree_open(sm_fpkg_mount_read_fn read, void *read_ctx,
+                                   uint64_t mount_size, uint64_t meta_base,
+                                   sm_fpkg_tree_t *tree_out);
+void sm_fpkg_tree_free(sm_fpkg_tree_t *tree);
 
 #endif

@@ -143,9 +143,46 @@ static sm_fpkg_status_t push_dir(pending_stack_t *stack, uint32_t inode,
   return SM_FPKG_OK;
 }
 
-sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
-                                       void *read_ctx, uint64_t mount_size,
-                                       uint64_t meta_base) {
+static sm_fpkg_status_t append_entry(sm_fpkg_tree_t *tree,
+                                     size_t *capacity, const char *path,
+                                     uint64_t size, uint64_t logical,
+                                     bool is_dir) {
+  if (tree->count >= TREE_MAX_ENTRIES)
+    return SM_FPKG_UNSUPPORTED;
+  if (tree->count == *capacity) {
+    size_t next = *capacity == 0 ? 64u : *capacity * 2u;
+    if (next > TREE_MAX_ENTRIES || next <= *capacity ||
+        next > SIZE_MAX / sizeof(*tree->entries))
+      return SM_FPKG_UNSUPPORTED;
+    void *grown = realloc(tree->entries, next * sizeof(*tree->entries));
+    if (!grown) return SM_FPKG_NOMEM;
+    tree->entries = grown;
+    *capacity = next;
+  }
+  char *copy = strdup(path);
+  if (!copy) return SM_FPKG_NOMEM;
+  tree->entries[tree->count++] = (sm_fpkg_tree_entry_t){
+      .path = copy,
+      .size = size,
+      .logical_offset = logical,
+      .is_dir = is_dir,
+  };
+  return SM_FPKG_OK;
+}
+
+void sm_fpkg_tree_free(sm_fpkg_tree_t *tree) {
+  if (!tree) return;
+  for (size_t i = 0; i < tree->count; ++i)
+    free(tree->entries[i].path);
+  free(tree->entries);
+  memset(tree, 0, sizeof(*tree));
+}
+
+sm_fpkg_status_t sm_fpkg_tree_open(sm_fpkg_mount_read_fn read, void *read_ctx,
+                                   uint64_t mount_size, uint64_t meta_base,
+                                   sm_fpkg_tree_t *tree_out) {
+  if (!tree_out) return SM_FPKG_CORRUPT;
+  memset(tree_out, 0, sizeof(*tree_out));
   if (!read || !range_fits(meta_base, TREE_BLOCK, mount_size))
     return SM_FPKG_CORRUPT;
   uint8_t superblock[0x40];
@@ -174,6 +211,7 @@ sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
   uint8_t *visited = calloc((size_t)inode_count, 1u);
   uint8_t *dir_buffer = NULL;
   pending_stack_t pending = {0};
+  size_t entry_capacity = 0;
   if (!visited) return SM_FPKG_NOMEM;
   char *root_path = calloc(1, 1u);
   if (!root_path) {
@@ -187,7 +225,6 @@ sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
   }
 
   uint64_t directory_budget = mount_size - meta_base;
-  size_t entry_count = 0;
   size_t path_bytes = 0;
   while (pending.count != 0) {
     pending_dir_t current = pending.items[--pending.count];
@@ -261,7 +298,7 @@ sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
       size_t prefix_length = strlen(current.path);
       size_t extra = prefix_length == 0 ? name_length : name_length + 1u;
       if (extra > TREE_MAX_PATH || prefix_length > TREE_MAX_PATH - extra ||
-          entry_count >= TREE_MAX_ENTRIES) {
+          tree_out->count >= TREE_MAX_ENTRIES) {
         status = SM_FPKG_UNSUPPORTED;
         free(current.path);
         goto done;
@@ -284,13 +321,18 @@ sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
       }
       memcpy(path + prefix_length + (prefix_length != 0), name, name_length);
       path[path_length] = '\0';
-      ++entry_count;
       path_bytes += path_length;
       if (kind == 3u) {
         if (current.depth >= TREE_MAX_DEPTH) {
           free(path);
           free(current.path);
           status = SM_FPKG_UNSUPPORTED;
+          goto done;
+        }
+        status = append_entry(tree_out, &entry_capacity, path, 0, 0, true);
+        if (status != SM_FPKG_OK) {
+          free(path);
+          free(current.path);
           goto done;
         }
         status = push_dir(&pending, inode_number, path, current.depth + 1u);
@@ -309,6 +351,9 @@ sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
              !add_u64(file.logical, file.size, &file_end) ||
              file_end > meta_base))
           status = SM_FPKG_CORRUPT;
+        if (status == SM_FPKG_OK)
+          status = append_entry(tree_out, &entry_capacity, path, file.size,
+                                file.logical, false);
         free(path);
         if (status != SM_FPKG_OK) {
           free(current.path);
@@ -331,5 +376,17 @@ done:
   free(pending.items);
   free(dir_buffer);
   free(visited);
+  if (status != SM_FPKG_OK)
+    sm_fpkg_tree_free(tree_out);
+  return status;
+}
+
+sm_fpkg_status_t sm_fpkg_tree_validate(sm_fpkg_mount_read_fn read,
+                                       void *read_ctx, uint64_t mount_size,
+                                       uint64_t meta_base) {
+  sm_fpkg_tree_t tree = {0};
+  sm_fpkg_status_t status =
+      sm_fpkg_tree_open(read, read_ctx, mount_size, meta_base, &tree);
+  sm_fpkg_tree_free(&tree);
   return status;
 }

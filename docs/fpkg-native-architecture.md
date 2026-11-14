@@ -147,7 +147,8 @@ Planned implementation areas, gated in order:
    file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). The descriptor
    is checked against the declared `pfs_image.dat` size. The probe decodes the
    inner image on demand and validates its superblock, inode table and bounded
-   directory tree. It does not yet extract files. The native decoder
+   directory tree into a bounded in-memory entry list. It does not yet extract
+   files or produce the normalized AMPR file index. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors
    only. Do not duplicate `sm_pkg` metadata handling.

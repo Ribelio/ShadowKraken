@@ -73,6 +73,12 @@ static void valid_mount(memory_mount_t *mount) {
 int main(void) {
   memory_mount_t mount;
   valid_mount(&mount);
+  sm_fpkg_tree_t tree = {0};
+  assert(sm_fpkg_tree_open(mount_read, &mount, sizeof(mount.bytes),
+                           META_BASE, &tree) == SM_FPKG_OK);
+  assert(tree.count == 1 && strcmp(tree.entries[0].path, "eboot.bin") == 0);
+  assert(!tree.entries[0].is_dir && tree.entries[0].logical_offset == 0);
+  sm_fpkg_tree_free(&tree);
   assert(sm_fpkg_tree_validate(mount_read, &mount, sizeof(mount.bytes),
                                META_BASE) == SM_FPKG_OK);
 
