@@ -71,7 +71,8 @@ verified generation before passing its directory through SMP's existing
 SMP validates the generation/source snapshot, then tracks a read-only nullfs of
 the original package parent at sandbox `/app0/kraken`, matching KrakenMount's
 `kraken.image` resolution. Existing lifecycle cleanup owns this layer by mount
-identity. The feature remains disabled by default.
+identity. The feature is enabled by default with `[fpkg] direct_mount=on`;
+set it to `off` to disable this backend.
 
 ## Current SMP call path
 
@@ -113,7 +114,7 @@ format target, not acceptance of a future C writer or a console launch result.
 
 | Operation | Existing owner / guard | FPKG-specific requirement |
 | --- | --- | --- |
-| Scan roots, source stability, removable media | `sm_scanner`, `sm_scan`, `sm_scan_tree` | Implemented: opt-in `.pkg` discovery, stable open, metadata and FPKG validation, existing duplicate/protected-title rules. |
+| Scan roots, source stability, removable media | `sm_scanner`, `sm_scan`, `sm_scan_tree` | Implemented: feature-gated `.pkg` discovery (enabled by default, explicitly disabled with `off`), stable open, metadata and FPKG validation, existing duplicate/protected-title rules. |
 | PKG metadata/classification | `sm_pkg.c`, `sm_fpkg.c` | Implemented: one PKG metadata parser, then a plaintext layout reader; no decryptor or security bypass was added. |
 | Cache creation and recovery | `sm_fpkg_cache.c` | Implemented: per-title lock, immutable owned generations, source snapshot, journal, active-pointer publication, recovery inspection, quarantine and ownership-checked cleanup. |
 | Registration and title state | `sm_install.c`, `sm_install_queue.c`, `mount.lnk`, appdb bridge | Implemented through existing SMP path after a generation is validated. Superseded cache cleanup waits for app.db confirmation on asynchronous batch installs. Actual console return codes remain PS5-only. |
@@ -172,11 +173,12 @@ uncertain state; cleanup validates the ownership manifest, serializes with
 title lifecycle state, quarantines first, then removes only owned entries.
 
 Host checks for reader, index, cache, scanner and sandbox cleanup are listed in
-`docs/fpkg-test-results.md`. The macOS SDK cannot compile the full PS5 project:
-`/opt/ps5-payload-sdk/toolchain/prospero.mk` and PS5 kernel headers are absent.
-There is no console here. The Ubuntu workflow now runs the focused cache,
-scanner and sandbox cleanup checks before its payload build, but it could not be
-dispatched from this checkout; Linux CI and PS5 validation remain outstanding.
+`docs/fpkg-test-results.md`. The macOS host lacks
+`/opt/ps5-payload-sdk/toolchain/prospero.mk` and PS5 kernel headers, so the full
+PS5 build is delegated to the Ubuntu workflow. Workflow `43612405370` built the
+payload successfully at commit `9bb1057` and uploaded a commit-specific ELF.
+There is no console here; PS5 registration, mount and launch validation remain
+outstanding.
 
 ## Remaining integration boundaries
 
