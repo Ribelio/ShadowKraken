@@ -151,8 +151,10 @@ Planned implementation areas, gated in order:
    enumerates validated paths and supports range reads from files, including the
    three reference CNT fallbacks (`icon0.png`, `icon0.dds`, and `param.json`). It
    can also map block-aligned file ranges to contiguous package offsets for AMPR
-   codec-2 records, and rejects unaligned or discontiguous ranges. It does not
-   yet extract files or produce the normalized AMPR file index. The native decoder
+   codec-2 records, and rejects unaligned or discontiguous ranges. The AMPR
+   writer can now build indexes from an opened package, with a caller-supplied
+   selection of files that will be staged loose. It still does not write those
+   files to a cache or publish the generated indexes. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors
    only. Do not duplicate `sm_pkg` metadata handling.

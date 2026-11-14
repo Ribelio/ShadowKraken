@@ -706,6 +706,10 @@ void sm_fpkg_close(sm_fpkg_t *fpkg) {
   free(fpkg);
 }
 
+uint64_t sm_fpkg_package_size(const sm_fpkg_t *fpkg) {
+  return fpkg ? fpkg->size : 0;
+}
+
 size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg) {
   return fpkg ? fpkg->tree.count : 0;
 }

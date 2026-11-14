@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "sm_fpkg.h"
+#include "sm_fpkg_index.h"
 
 #define OUTER_BLOCK 0x10000u
 #define OUTER_BLOCK_COUNT 24u
@@ -36,6 +37,18 @@ static void put_le16(uint8_t *p, uint16_t v) {
 static void put_le64(uint8_t *p, uint64_t v) {
   for (unsigned i = 0; i < 8; ++i)
     p[i] = (uint8_t)(v >> (i * 8));
+}
+
+static uint64_t get_le64(const uint8_t *p) {
+  uint64_t v = 0;
+  for (unsigned i = 0; i < 8; ++i)
+    v |= (uint64_t)p[i] << (i * 8u);
+  return v;
+}
+
+static uint32_t get_le32(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static void put_bits(uint8_t *record, unsigned low, unsigned width,
@@ -211,6 +224,11 @@ static sm_pkg_info_t metadata(void) {
   return info;
 }
 
+static bool extract_eboot(const char *path, void *ctx) {
+  (void)ctx;
+  return strcmp(path, "eboot.bin") == 0;
+}
+
 int main(void) {
   memory_pkg_t pkg;
   sm_pkg_info_t info = metadata();
@@ -235,6 +253,23 @@ int main(void) {
   assert(block_count == 1 && block.package_offset == 5u * OUTER_BLOCK &&
          block.stored_size == 0x40000u && block.raw_size == 0x40000u &&
          !block.kraken_encoded);
+  sm_fpkg_index_blob_t generated_index = {0}, generated_manifest = {0};
+  assert(sm_fpkg_index_build_package(fpkg, NULL, NULL, 123,
+                                     &generated_index, &generated_manifest) ==
+         SM_FPKG_OK);
+  assert(memcmp(generated_index.data, "AMPRIDX3", 8) == 0);
+  assert(memcmp(generated_manifest.data, "AMPRPAK4", 8) == 0);
+  assert(get_le64(generated_manifest.data + 40) == 1);
+  assert(get_le64(generated_manifest.data + 48) == 1);
+  sm_fpkg_index_blob_free(&generated_index);
+  sm_fpkg_index_blob_free(&generated_manifest);
+  assert(sm_fpkg_index_build_package(fpkg, extract_eboot, NULL, 123,
+                                     &generated_index, &generated_manifest) ==
+         SM_FPKG_OK);
+  assert(get_le64(generated_manifest.data + 48) == 0);
+  assert(get_le32(generated_manifest.data + 128u + 40u) == 0);
+  sm_fpkg_index_blob_free(&generated_index);
+  sm_fpkg_index_blob_free(&generated_manifest);
   uint8_t payload[13];
   assert(sm_fpkg_read_file(fpkg, 0, 0, payload, sizeof(payload)) ==
          SM_FPKG_OK);

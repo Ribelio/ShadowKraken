@@ -44,6 +44,7 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
                                      const sm_pkg_info_t *metadata,
                                      sm_fpkg_t **fpkg_out);
 void sm_fpkg_close(sm_fpkg_t *fpkg);
+uint64_t sm_fpkg_package_size(const sm_fpkg_t *fpkg);
 size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg);
 bool sm_fpkg_file_at(const sm_fpkg_t *fpkg, size_t index,
                      sm_fpkg_file_t *file_out);

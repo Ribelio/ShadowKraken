@@ -79,11 +79,14 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c \
             src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c \
+            src/sm_fpkg_index.c \
             -o /tmp/sm-fpkg-header-test
           /tmp/sm-fpkg-header-test
-          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/test_fpkg_index.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-index-test
+            tests/test_fpkg_index.c src/sm_fpkg_index.c src/sm_fpkg.c \
+            src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c \
+            src/sm_fpkg_tree.c -o /tmp/sm-fpkg-index-test
           /tmp/sm-fpkg-index-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             -fsanitize=address,undefined -fno-omit-frame-pointer \

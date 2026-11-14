@@ -575,6 +575,116 @@ done:
   return status;
 }
 
+sm_fpkg_status_t sm_fpkg_index_build_package(
+    const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract_fn,
+    void *extract_ctx, int64_t package_mtime,
+    sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out) {
+  if (!index_out || !manifest_out || index_out == manifest_out)
+    return SM_FPKG_CORRUPT;
+  index_out->data = NULL;
+  index_out->size = 0;
+  manifest_out->data = NULL;
+  manifest_out->size = 0;
+  if (!fpkg)
+    return SM_FPKG_CORRUPT;
+  size_t entry_count = sm_fpkg_file_count(fpkg);
+  if (entry_count == 0 || entry_count > MAX_INDEX_FILES ||
+      sm_fpkg_package_size(fpkg) == 0)
+    return SM_FPKG_UNSUPPORTED;
+
+  sm_fpkg_index_file_t *files = calloc(entry_count, sizeof(*files));
+  sm_fpkg_index_chunk_t **owned_chunks =
+      calloc(entry_count, sizeof(*owned_chunks));
+  sm_fpkg_block_t *blocks = NULL;
+  if (!files || !owned_chunks) {
+    free(files);
+    free(owned_chunks);
+    return SM_FPKG_NOMEM;
+  }
+  static const sm_fpkg_index_chunk_t empty_chunks[1] = {{0}};
+  size_t file_count = 0, total_chunks = 0;
+  sm_fpkg_status_t status = SM_FPKG_OK;
+  for (size_t i = 0; i < entry_count; ++i) {
+    sm_fpkg_file_t entry;
+    if (!sm_fpkg_file_at(fpkg, i, &entry)) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+    if (entry.is_directory)
+      continue;
+    sm_fpkg_index_file_t *file = &files[file_count];
+    file->path = entry.path;
+    file->size = entry.size;
+    if (should_extract_fn && should_extract_fn(entry.path, extract_ctx))
+      goto next_file;
+
+    size_t block_count = 0;
+    status = sm_fpkg_file_block_count(fpkg, i, &block_count);
+    if (status != SM_FPKG_OK)
+      break;
+    if (block_count > MAX_INDEX_CHUNKS - total_chunks) {
+      status = SM_FPKG_UNSUPPORTED;
+      break;
+    }
+    if (block_count == 0) {
+      file->chunks = empty_chunks;
+      goto next_file;
+    }
+    if (block_count > SIZE_MAX / sizeof(*blocks) ||
+        block_count > SIZE_MAX / sizeof(*owned_chunks[file_count])) {
+      status = SM_FPKG_UNSUPPORTED;
+      break;
+    }
+    blocks = malloc(block_count * sizeof(*blocks));
+    owned_chunks[file_count] =
+        malloc(block_count * sizeof(*owned_chunks[file_count]));
+    if (!blocks || !owned_chunks[file_count]) {
+      status = SM_FPKG_NOMEM;
+      break;
+    }
+    size_t actual_count = 0;
+    status = sm_fpkg_file_blocks(fpkg, i, blocks, block_count,
+                                 &actual_count);
+    if (status != SM_FPKG_OK)
+      break;
+    if (actual_count != block_count) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+    for (size_t j = 0; j < block_count; ++j) {
+      owned_chunks[file_count][j] = (sm_fpkg_index_chunk_t){
+          .package_offset = blocks[j].package_offset,
+          .stored_length = blocks[j].stored_size,
+          .raw_length = blocks[j].raw_size,
+          .even_length = blocks[j].even_size,
+          .mode = blocks[j].mode,
+          .kraken_encoded = blocks[j].kraken_encoded,
+      };
+    }
+    file->chunks = owned_chunks[file_count];
+    file->chunk_count = block_count;
+    total_chunks += block_count;
+    free(blocks);
+    blocks = NULL;
+next_file:
+    ++file_count;
+  }
+  if (status == SM_FPKG_OK)
+    status = sm_fpkg_index_build(files, file_count,
+                                 sm_fpkg_package_size(fpkg), package_mtime,
+                                 index_out, manifest_out);
+  free(blocks);
+  for (size_t i = 0; i < entry_count; ++i)
+    free(owned_chunks[i]);
+  free(owned_chunks);
+  free(files);
+  if (status != SM_FPKG_OK) {
+    sm_fpkg_index_blob_free(index_out);
+    sm_fpkg_index_blob_free(manifest_out);
+  }
+  return status;
+}
+
 void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob) {
   if (!blob)
     return;

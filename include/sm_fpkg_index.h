@@ -30,10 +30,21 @@ typedef struct {
   size_t size;
 } sm_fpkg_index_blob_t;
 
+typedef bool (*sm_fpkg_index_extract_fn)(const char *path, void *ctx);
+
 /* Build deterministic AMPRIDX3 and AMPRPAK4 byte images. */
 sm_fpkg_status_t sm_fpkg_index_build(
     const sm_fpkg_index_file_t *files, size_t file_count,
     uint64_t package_size, int64_t package_mtime,
+    sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out);
+/* Build indexes directly from a validated package. Files selected by
+ * should_extract_fn are represented as loose app0 files and must be staged by
+ * the caller before publication. Other files must map to contiguous package
+ * blocks or the call fails closed with SM_FPKG_UNSUPPORTED. */
+sm_fpkg_status_t sm_fpkg_index_build_package(
+    const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract_fn,
+    void *extract_ctx,
+    int64_t package_mtime,
     sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out);
 void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob);
 
