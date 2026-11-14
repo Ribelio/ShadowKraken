@@ -52,7 +52,7 @@ therefore does not exist for these cases.
 | Gate | Status |
 | --- | --- |
 | G0 repository/source/license audit | Source and license audit recorded. Baseline PS5 build is blocked by missing SDK. PR #200 is open, not merged. |
-| G1 legal-fixture differential reader tests | NOT MET; synthetic outer-to-inner reads and a bounded inner entry list exist, but there is no legal FPKG fixture, CNT metadata fallback, normalized AMPR file index, or extraction. |
+| G1 legal-fixture differential reader tests | NOT MET; synthetic outer-to-inner reads, retained file paths, bounded file reads and CNT fallback entries exist, but there is no legal FPKG fixture, normalized AMPR file index, or extraction. |
 | G2 decoder differential/sanitizer/fuzz gates | NOT MET; native decoder and synthetic differential vectors exist, but the legal golden corpus, malformed-stream corpus, fuzzing and worst-case CPU/memory measurements remain. |
 | G3 byte-identical indexes and runtime readback | NOT MET; C writer exists and one synthetic output passed the pinned parser, but no byte-identical writer comparison, multi-case manifest coverage or decoded package-chunk readback has run. |
 | G4 safe cache crash/recovery tests | Design contract recorded; implementation and failure injection not run. |
@@ -60,9 +60,10 @@ therefore does not exist for these cases.
 | G6 Linux CI and release build | NOT RUN; requires a push-capable fork/PR and CI. |
 
 Host-verified functionality includes the bounded FIH/PFS/CNT and outer metadata
-probe through descriptor mapping and parsing, the standalone Kraken descriptor
-parser against a synthetic descriptor also accepted by ps5-dump-forge, the AMPR
-writer against the pinned AMPR parser, and the native Kraken decoder against
-synthetic reference vectors, plus retained inner-tree entry paths through the
-outer reader. No normalized AMPR file index, extraction, cache, registration,
-or launch functionality is claimed as implemented or verified by this record.
+reader through descriptor mapping and parsing, retained inner-tree paths and
+bounded file reads (including the three reference CNT fallback paths), the
+standalone Kraken descriptor parser against a synthetic descriptor also
+accepted by ps5-dump-forge, the AMPR writer against the pinned AMPR parser, and
+the native Kraken decoder against synthetic reference vectors. No normalized
+AMPR file index from an opened package, extraction, cache, registration, or
+launch functionality is claimed as implemented or verified by this record.
