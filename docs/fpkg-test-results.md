@@ -11,7 +11,8 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 - Test FPKG: not supplied. No game-derived fixture was created or copied.
 - PS5 console: unavailable in this task environment.
 - Linux CI: not run. Upstream GitHub permission is read-only; local commits cannot
-  trigger the repository's workflow.
+  trigger the repository's workflow. The existing Ubuntu PS5 workflow now has a
+  focused ASan/UBSan host-test step for this probe, but it has not executed here.
 
 ## Baseline build and regression suite
 

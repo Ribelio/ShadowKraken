@@ -64,6 +64,13 @@ jobs:
             xxd \
             zip
 
+      - name: Run native FPKG host safety test
+        run: |
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test
+          /tmp/sm-fpkg-header-test
+
       - name: Configure pacman for locally built packages
         run: |
           sudo install -d -m 755 /var/lib/pacman/local /var/cache/pacman/pkg
