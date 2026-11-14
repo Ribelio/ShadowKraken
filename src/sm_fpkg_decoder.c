@@ -508,11 +508,13 @@ static sm_fpkg_status_t decode_half(sm_fpkg_decoder_t *decoder,
       uint8_t value = lengths.bytes[length_at++];
       size_t extra = value;
       if (value == 255u) {
-        if (escape_at >= escape_count || escapes[escape_at] > SIZE_MAX - 255u ||
-            extra > SIZE_MAX - 255u - escapes[escape_at]) {
+        if (escape_at >= escape_count ||
+            escapes[escape_at] > SIZE_MAX - extra) {
           status = SM_FPKG_CORRUPT; break;
         }
-        extra += 255u + escapes[escape_at++];
+        /* The 255-byte base is already in `extra`; the bitstream supplies
+         * only the additional length. */
+        extra += escapes[escape_at++];
       }
       literal_count = 3u + extra;
     }
@@ -541,11 +543,12 @@ static sm_fpkg_status_t decode_half(sm_fpkg_decoder_t *decoder,
       uint8_t value = lengths.bytes[length_at++];
       size_t extra = value;
       if (value == 255u) {
-        if (escape_at >= escape_count || escapes[escape_at] > SIZE_MAX - 255u ||
-            extra > SIZE_MAX - 255u - escapes[escape_at]) {
+        if (escape_at >= escape_count ||
+            escapes[escape_at] > SIZE_MAX - extra) {
           status = SM_FPKG_CORRUPT; break;
         }
-        extra += 255u + escapes[escape_at++];
+        /* Match codes use a base of 17, plus this escaped length. */
+        extra += escapes[escape_at++];
       }
       match_length = 14u + 3u + extra;
     }

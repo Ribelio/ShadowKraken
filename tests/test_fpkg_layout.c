@@ -9,6 +9,7 @@
 #define BLOCK 0x40000u
 #define RECORD_AT 59u
 #define DESCRIPTOR_SIZE 95u
+#define OVERLAP_DESCRIPTOR_SIZE 113u
 
 static void put_le64(uint8_t *p, uint64_t v) {
   for (unsigned i = 0; i < 8; ++i)
@@ -52,6 +53,36 @@ static void make_descriptor(uint8_t bytes[DESCRIPTOR_SIZE]) {
   /* Last record is the logical end sentinel: (mount % window) >> 4 == 0. */
 }
 
+static void make_overlapping_descriptor(
+    uint8_t bytes[OVERLAP_DESCRIPTOR_SIZE]) {
+  memset(bytes, 0, OVERLAP_DESCRIPTOR_SIZE);
+  /* Two logical blocks; the second stored range reuses 62 prior bytes. */
+  put_le64(bytes, (UINT64_C(2) << 24) | 3u | (UINT64_C(2) << 32));
+  put_le64(bytes + 8, UINT64_C(4) << 24); /* Six records. */
+  put_boundary(bytes + 16, 0, 0);
+  put_boundary(bytes + 22, BLOCK, 0);
+  put_boundary(bytes + 28, 2u * BLOCK, 0);
+  put_boundary(bytes + 34, 2u * BLOCK, 0x40);
+  bytes[RECORD_AT - 1u] = 4;
+
+  uint8_t *first = bytes + RECORD_AT + 9u;
+  put_bits(first, 14, 17, (1u << 17) - 1u);
+  put_bits(first, 66, 1, 1); /* Record 2 anchors the second block. */
+  put_bits(first, 68, 4, 3); /* Its start is just below the 256 KiB edge. */
+
+  uint8_t *second_anchor = bytes + RECORD_AT + 18u;
+  put_bits(second_anchor, 48, 18, BLOCK - 62u);
+
+  uint8_t *second = bytes + RECORD_AT + 27u;
+  put_bits(second, 14, 17, (1u << 17) - 1u);
+  put_bits(second, 48, 18, BLOCK - 62u);
+  put_bits(second, 66, 1, 1); /* Record 4 terminates the stored stream. */
+
+  uint8_t *terminator = bytes + RECORD_AT + 36u;
+  put_bits(terminator, 26, 22, 1);
+  put_bits(terminator, 48, 18, BLOCK - 62u);
+}
+
 int main(void) {
   uint8_t descriptor[DESCRIPTOR_SIZE];
   sm_fpkg_layout_t layout = {0};
@@ -65,6 +96,18 @@ int main(void) {
   assert(layout.blocks[0].stored_length == BLOCK);
   assert(layout.blocks[0].even_length == BLOCK / 2u);
   assert(layout.blocks[0].mode == 0 && layout.blocks[0].raw);
+  sm_fpkg_layout_free(&layout);
+
+  uint8_t overlapping[OVERLAP_DESCRIPTOR_SIZE];
+  make_overlapping_descriptor(overlapping);
+  assert(sm_fpkg_layout_parse(overlapping, sizeof(overlapping), 2u * BLOCK,
+                              &layout) == SM_FPKG_OK);
+  assert(layout.mount_size == 2u * BLOCK && layout.block_count == 2);
+  assert(layout.blocks[0].logical_offset == 0);
+  assert(layout.blocks[0].stored_offset == 0);
+  assert(layout.blocks[1].logical_offset == BLOCK);
+  assert(layout.blocks[1].stored_offset == BLOCK - 62u);
+  assert(layout.blocks[1].stored_length == BLOCK);
   sm_fpkg_layout_free(&layout);
 
   assert(sm_fpkg_layout_parse(descriptor, sizeof(descriptor) - 1u, BLOCK,

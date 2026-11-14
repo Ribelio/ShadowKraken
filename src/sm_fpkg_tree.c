@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TREE_BLOCK 0x40000u
+/* The inner PFS inode-table block is 64 KiB; Kraken's logical data block is
+ * 256 KiB and is a separate size used by the image reader. */
+#define TREE_BLOCK 0x10000u
 #define TREE_INODE_SIZE 0xa8u
 #define TREE_INODES_PER_BLOCK 390u
 #define TREE_FIRST_DIR_INODE 4u

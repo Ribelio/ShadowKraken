@@ -52,6 +52,12 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
                                      sm_pkg_read_fn read, void *ctx,
                                      const sm_pkg_info_t *metadata,
                                      sm_fpkg_t **fpkg_out);
+/* Open from a caller-owned O_RDONLY descriptor; it must stay open until close. */
+sm_fpkg_status_t sm_fpkg_open_fd(const char *name, int fd,
+                                 const sm_pkg_info_t *metadata,
+                                 sm_fpkg_t **fpkg_out);
+/* Return the retained fd for handles created by sm_fpkg_open_fd, else -1. */
+int sm_fpkg_source_fd(const sm_fpkg_t *fpkg);
 void sm_fpkg_close(sm_fpkg_t *fpkg);
 uint64_t sm_fpkg_package_size(const sm_fpkg_t *fpkg);
 size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg);

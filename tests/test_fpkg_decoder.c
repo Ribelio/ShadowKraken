@@ -117,6 +117,34 @@ static void test_lz_match(sm_fpkg_decoder_t *decoder) {
          SM_FPKG_CORRUPT);
 }
 
+static void test_escaped_match_length(sm_fpkg_decoder_t *decoder) {
+  enum { LOGICAL = 8 + 272 };
+  uint8_t stored[24] = {0};
+  uint8_t output[LOGICAL] = {0};
+  uint8_t expected[LOGICAL];
+  for (size_t i = 0; i < 8u; ++i)
+    expected[i] = (uint8_t)(0x60u + i);
+  for (size_t i = 8u; i < LOGICAL; ++i)
+    expected[i] = expected[i - 8u];
+
+  size_t at = 0;
+  memcpy(stored + at, expected, 8u); at += 8u;
+  stored[at++] = 0x81; /* One byte at the end holds the escaped length. */
+  put_raw_array_header(stored + at, 0u); at += 3u;
+  put_raw_array_header(stored + at, 1u); at += 3u;
+  stored[at++] = 0x3c; /* No literals, recent distance 8, escaped match. */
+  put_raw_array_header(stored + at, 0u); at += 3u;
+  put_raw_array_header(stored + at, 1u); at += 3u;
+  stored[at++] = 0xff; /* Escape marker: 255-byte base plus zero. */
+  stored[at++] = 0x80; /* MSB length code 64, yielding zero excess. */
+  assert(at == sizeof(stored));
+
+  assert(sm_fpkg_decode_block(decoder, stored, sizeof(stored),
+                              sizeof(stored), 2u, output, LOGICAL) ==
+         SM_FPKG_OK);
+  assert(memcmp(output, expected, LOGICAL) == 0);
+}
+
 static void test_single_symbol_huffman_array(sm_fpkg_decoder_t *decoder) {
   uint8_t stored[8] = {0};
   uint8_t output[32] = {0};
@@ -166,6 +194,7 @@ int main(void) {
   test_lz_all_literals(decoder, false);
   test_lz_all_literals(decoder, true);
   test_lz_match(decoder);
+  test_escaped_match_length(decoder);
   test_single_symbol_huffman_array(decoder);
   test_two_symbol_huffman_array(decoder);
   uint8_t output[16];

@@ -12,9 +12,13 @@
 #include "sm_fpkg_internal.h"
 
 #include <stdbool.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define SM_FPKG_FIH_SIZE 0x100u
 #define SM_FPKG_CNT_HEADER_SIZE 0x1000u
@@ -35,6 +39,7 @@
 struct sm_fpkg {
   sm_pkg_read_fn read;
   void *read_ctx;
+  int *owned_fd_ctx;
   uint64_t size;
   sm_pkg_info_t metadata;
   uint32_t *image_map;
@@ -46,6 +51,21 @@ struct sm_fpkg {
   sm_fpkg_image_reader_t *image;
   sm_fpkg_tree_t tree;
 };
+
+static int read_fd_at(void *ctx, uint64_t offset, void *buffer, size_t size) {
+  int fd = *(int *)ctx;
+  size_t done = 0;
+  while (done < size) {
+    ssize_t count = pread(fd, (uint8_t *)buffer + done, size - done,
+                          (off_t)(offset + done));
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0)
+      return count == 0 ? EIO : errno;
+    done += (size_t)count;
+  }
+  return 0;
+}
 
 static uint32_t read_be32(const uint8_t *bytes) {
   return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
@@ -697,12 +717,47 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
   return SM_FPKG_OK;
 }
 
+sm_fpkg_status_t sm_fpkg_open_fd(const char *name, int fd,
+                                 const sm_pkg_info_t *metadata,
+                                 sm_fpkg_t **fpkg_out) {
+  if (!fpkg_out)
+    return SM_FPKG_CORRUPT;
+  *fpkg_out = NULL;
+  if (!name || fd < 0 || !metadata)
+    return SM_FPKG_CORRUPT;
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || (flags & O_ACCMODE) != O_RDONLY)
+    return SM_FPKG_UNSUPPORTED;
+  struct stat st;
+  if (fstat(fd, &st) != 0)
+    return SM_FPKG_IO;
+  if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
+      !sm_pkg_source_matches(metadata, &st))
+    return SM_FPKG_UNSUPPORTED;
+  int *fd_ctx = malloc(sizeof(*fd_ctx));
+  if (!fd_ctx)
+    return SM_FPKG_NOMEM;
+  *fd_ctx = fd;
+  sm_fpkg_status_t status = sm_fpkg_open_stream(
+      name, (uint64_t)st.st_size, read_fd_at, fd_ctx, metadata, fpkg_out);
+  if (status == SM_FPKG_OK)
+    (*fpkg_out)->owned_fd_ctx = fd_ctx;
+  else
+    free(fd_ctx);
+  return status;
+}
+
+int sm_fpkg_source_fd(const sm_fpkg_t *fpkg) {
+  return fpkg && fpkg->owned_fd_ctx ? *fpkg->owned_fd_ctx : -1;
+}
+
 void sm_fpkg_close(sm_fpkg_t *fpkg) {
   if (!fpkg) return;
   sm_fpkg_tree_free(&fpkg->tree);
   sm_fpkg_image_reader_free(fpkg->image);
   sm_fpkg_layout_free(&fpkg->layout);
   free(fpkg->image_map);
+  free(fpkg->owned_fd_ctx);
   free(fpkg);
 }
 

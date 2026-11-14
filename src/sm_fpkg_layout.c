@@ -198,7 +198,6 @@ sm_fpkg_status_t sm_fpkg_layout_parse(const uint8_t *descriptor,
   sm_fpkg_layout_t parsed = {0};
   size_t capacity = 0;
   uint64_t cursor = 0, logical = 0, carried_nibble = 0;
-  uint64_t previous_stored_end = 0;
   bool next_is_anchor = true;
   for (uint64_t i = 0; i + 1u < records; ++i) {
     unsigned __int128 record =
@@ -282,7 +281,11 @@ sm_fpkg_status_t sm_fpkg_layout_parse(const uint8_t *descriptor,
     }
     uint64_t stored_len = end - cursor;
     uint64_t stored_end;
-    if (cursor < previous_stored_end || even_size > stored_len) {
+    /* Kraken descriptors may reuse the tail of a prior stored extent. Each
+     * block is decoded independently, so only the individual range bounds
+     * below matter; requiring globally monotonic stored offsets rejects legal
+     * layouts accepted by the pinned reader. */
+    if (even_size > stored_len) {
       sm_fpkg_layout_free(&parsed);
       goto done;
     }
@@ -298,7 +301,6 @@ sm_fpkg_status_t sm_fpkg_layout_parse(const uint8_t *descriptor,
         result = append_status;
       goto done;
     }
-    previous_stored_end = stored_end;
     cursor = end;
     logical += len;
   }

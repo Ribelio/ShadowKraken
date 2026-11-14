@@ -8,7 +8,7 @@
 
 #define MOUNT_SIZE 0xc0000u
 #define META_BASE 0u
-#define INNER_BLOCK 0x40000u
+#define INNER_BLOCK 0x10000u
 #define INODE_SIZE 0xa8u
 #define INODE_TABLE_AT INNER_BLOCK
 #define DIR_AT 0x80000u
@@ -81,6 +81,11 @@ int main(void) {
   sm_fpkg_tree_free(&tree);
   assert(sm_fpkg_tree_validate(mount_read, &mount, sizeof(mount.bytes),
                                META_BASE) == SM_FPKG_OK);
+
+  valid_mount(&mount);
+  put_le32(mount.bytes + 0x20u, 0x40000u);
+  assert(sm_fpkg_tree_validate(mount_read, &mount, sizeof(mount.bytes),
+                               META_BASE) == SM_FPKG_CORRUPT);
 
   valid_mount(&mount);
   make_dirent(mount.bytes + DIR_AT, 5, 2,
