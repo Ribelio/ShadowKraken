@@ -2,6 +2,7 @@
 
 #include <stdatomic.h>
 
+#include "sm_install.h"
 #include "sm_install_queue.h"
 #include "sm_types.h"
 #include "sm_appdb.h"
@@ -29,6 +30,7 @@ typedef struct {
   char title_id[MAX_TITLE_ID];
   char title_name[MAX_TITLE_NAME];
   char source_path[MAX_PATH];
+  char previous_fpkg_generation[112];
   char manual_source_path[MAX_PATH];
   uint64_t requested_at_us;
   bool has_src_snd0;
@@ -186,7 +188,8 @@ static void append_batch_install_line(char *message, size_t message_size,
 }
 
 bool sm_install_queue_candidate(const scan_candidate_t *candidate,
-                                bool has_src_snd0) {
+                                bool has_src_snd0,
+                                const char *previous_fpkg_generation_name) {
   if (!candidate || candidate->title_id[0] == '\0' ||
       candidate->title_name[0] == '\0' || candidate->path[0] == '\0') {
     return false;
@@ -213,6 +216,10 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
   (void)strlcpy(entry->title_name, candidate->title_name,
                 sizeof(entry->title_name));
   (void)strlcpy(entry->source_path, candidate->path, sizeof(entry->source_path));
+  if (previous_fpkg_generation_name)
+    (void)strlcpy(entry->previous_fpkg_generation,
+                  previous_fpkg_generation_name,
+                  sizeof(entry->previous_fpkg_generation));
   (void)strlcpy(entry->manual_source_path, candidate->manual_source_path,
                 sizeof(entry->manual_source_path));
   entry->manual = candidate->manual;
@@ -241,6 +248,8 @@ static void finalize_pending_install_success(pending_install_entry_t *entry) {
       log_debug("  [DB] snd0info updated rows=%d", snd0_updates);
   }
   cache_game_entry(entry->source_path, entry->title_id, entry->title_name);
+  sm_install_release_replaced_fpkg_generation(
+      entry->title_id, entry->previous_fpkg_generation, entry->source_path);
   if (entry->manual)
     sm_manual_note_installed(entry->manual_source_path, entry->title_id,
                              entry->title_name);

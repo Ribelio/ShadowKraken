@@ -34,9 +34,14 @@ bool sm_pkg_source_matches(const sm_pkg_info_t *info, const struct stat *st) {
          mtime == info->source_mtime && mtime_ns == info->source_mtime_ns;
 }
 
+typedef struct {
+  unsigned calls;
+  unsigned cancel_at;
+} cancel_context_t;
+
 static bool cancel_on_call(void *opaque) {
-  unsigned *calls = opaque;
-  return ++(*calls) >= 3u;
+  cancel_context_t *cancel = opaque;
+  return ++cancel->calls >= cancel->cancel_at;
 }
 
 static void write_all(int fd, const void *data, size_t size) {
@@ -191,11 +196,11 @@ int main(void) {
   assert(open_status == SM_FPKG_OK);
   assert(fpkg && sm_fpkg_file_count(fpkg) == 4u);
 
-  unsigned cancel_calls = 0;
+  cancel_context_t cancel = {.cancel_at = 6u};
   sm_fpkg_cache_options_t cancelled_build = {
       .max_extract_bytes = SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT,
       .is_cancelled = cancel_on_call,
-      .cancel_ctx = &cancel_calls,
+      .cancel_ctx = &cancel,
   };
   char generation_path[MAX_PATH];
   sm_fpkg_status_t cancelled_status = sm_fpkg_cache_build_generation(
@@ -205,6 +210,7 @@ int main(void) {
     fprintf(stderr, "synthetic cache cancellation returned %d\n",
             (int)cancelled_status);
   assert(cancelled_status == SM_FPKG_CANCELLED);
+  assert(cancel.calls == cancel.cancel_at);
   assert(generation_path[0] == '\0');
 
   sm_fpkg_cache_recovery_report_t recovery = {0};
@@ -281,6 +287,52 @@ int main(void) {
   assert(close(extracted_fd) == 0);
   assert(memcmp(image_name, "kraken/source.pkg\n", sizeof(image_name)) == 0);
 
+  char second_source_path[MAX_PATH];
+  assert(snprintf(second_source_path, sizeof(second_source_path),
+                  "%s/source-v2.pkg", root) > 0);
+  int second_write_fd = open(second_source_path,
+                             O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+  assert(second_write_fd >= 0);
+  write_all(second_write_fd, pkg.bytes, sizeof(pkg.bytes));
+  assert(fsync(second_write_fd) == 0 && close(second_write_fd) == 0);
+  int second_source_fd = open(second_source_path,
+                              O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(second_source_fd >= 0);
+  struct stat second_source_stat;
+  assert(fstat(second_source_fd, &second_source_stat) == 0);
+  sm_pkg_info_t second_info = metadata();
+  set_source_identity(&second_info, second_source_path, &second_source_stat);
+  sm_fpkg_t *second_fpkg = NULL;
+  assert(sm_fpkg_open_fd(second_source_path, second_source_fd, &second_info,
+                         &second_fpkg) == SM_FPKG_OK);
+
+  cancel_context_t late_cancel = {.cancel_at = 12u};
+  sm_fpkg_cache_options_t cancelled_rebuild = {
+      .max_extract_bytes = SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT,
+      .is_cancelled = cancel_on_call,
+      .cancel_ctx = &late_cancel,
+  };
+  char rejected_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, second_source_path, second_source_fd, &second_info,
+             second_fpkg, NULL, NULL, &cancelled_rebuild,
+             rejected_generation) == SM_FPKG_CANCELLED);
+  assert(late_cancel.calls == late_cancel.cancel_at &&
+         rejected_generation[0] == '\0');
+  recovery = (sm_fpkg_cache_recovery_report_t){0};
+  assert(sm_fpkg_cache_recover_title(cache_root, second_info.title_id,
+                                     &recovery) == SM_FPKG_OK);
+  assert(strcmp(recovery.active_generation, generation_path) == 0 &&
+         recovery.staging_generations == 2u);
+  assert(sm_fpkg_cache_find_current_generation(
+             cache_root, &info, current_generation) == SM_FPKG_OK);
+  assert(strcmp(current_generation, generation_path) == 0);
+  assert(sm_fpkg_cache_find_current_generation(
+             cache_root, &second_info, current_generation) ==
+         SM_FPKG_UNSUPPORTED);
+  sm_fpkg_close(second_fpkg);
+  assert(close(second_source_fd) == 0);
+
   char repeated_generation[MAX_PATH];
   assert(sm_fpkg_cache_build_generation(
              cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
@@ -289,6 +341,6 @@ int main(void) {
   sm_fpkg_close(fpkg);
   assert(close(source_fd) == 0);
   remove_tree(root);
-  puts("synthetic plaintext FPKG extraction, index build, cancelled publication recovery, and generation reuse passed");
+  puts("synthetic FPKG cache build, partial extraction recovery, failed replacement preservation, and generation reuse passed");
   return 0;
 }

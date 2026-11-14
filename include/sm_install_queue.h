@@ -19,7 +19,8 @@ void sm_install_poll_pending(void);
 void sm_install_service_pending(void);
 // Queue a staged title for the next batch install request.
 bool sm_install_queue_candidate(const scan_candidate_t *candidate,
-                                bool has_src_snd0);
+                                bool has_src_snd0,
+                                const char *previous_fpkg_generation_name);
 // Submit all queued titles when no batch install is currently pending.
 bool sm_install_submit_queued(void);
 // Record retry state for every queued title after a batch submit failure.

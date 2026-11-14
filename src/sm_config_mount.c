@@ -1677,6 +1677,7 @@ bool sm_config_set_title_fakelib_enabled(const char *title_id, bool enabled) {
 bool sm_config_write_web_settings(bool debug_enabled, bool quiet_mode,
                                   bool update_emulators_enabled,
                                   bool auto_update_ampr_enabled,
+                                  bool fpkg_direct_mount_enabled,
                                   bool auto_remove_missing_games,
                                   uint32_t auto_remove_missing_delay_seconds,
                                   bool allow_lan_access,
@@ -1740,6 +1741,7 @@ bool sm_config_write_web_settings(bool debug_enabled, bool quiet_mode,
       sm_ini_set(&main, "general", "quiet_mode", quiet_mode ? "on" : "off") &&
       sm_ini_set(&main, "emulators", "update_enabled", update_emulators_enabled ? "on" : "off") &&
       sm_ini_set(&main, "emulators", "auto_update_ampr", auto_update_ampr_enabled ? "on" : "off") &&
+      sm_ini_set(&main, "fpkg", "direct_mount", fpkg_direct_mount_enabled ? "on" : "off") &&
       sm_ini_set(&main, "fakelib", "default_mode", sm_config_fakelib_mode_name(fakelib_default_mode)) &&
       sm_ini_set(&main, "library", "remove_missing", auto_remove_missing_games ? "on" : "off") &&
       sm_ini_set(&main, "library", "remove_delay_seconds", delay) &&

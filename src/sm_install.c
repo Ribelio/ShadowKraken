@@ -388,16 +388,22 @@ static void end_fpkg_cache_cleanup(void *ctx) {
   sm_shellcore_end_external_mutation();
 }
 
-static void remove_previous_fpkg_generation(const char *title_id,
-                                            const char *previous_path,
-                                            const char *current_path) {
-  if (!previous_path || !previous_path[0] ||
-      strcmp(previous_path, current_path) == 0)
+void sm_install_release_replaced_fpkg_generation(
+    const char *title_id, const char *previous_generation_name,
+    const char *current_path) {
+  if (!title_id || !previous_generation_name ||
+      !previous_generation_name[0] || !current_path || !current_path[0])
     return;
-  const char *name = strrchr(previous_path, '/');
-  name = name ? name + 1 : previous_path;
+  char previous_path[MAX_PATH];
+  int path_length = snprintf(previous_path, sizeof(previous_path), "%s/%s/%s",
+                             SM_FPKG_CACHE_DEFAULT_ROOT, title_id,
+                             previous_generation_name);
+  if (path_length < 0 || (size_t)path_length >= sizeof(previous_path))
+    return;
+  if (strcmp(previous_path, current_path) == 0)
+    return;
   sm_fpkg_status_t status = sm_fpkg_cache_remove_generation(
-      SM_FPKG_CACHE_DEFAULT_ROOT, title_id, name,
+      SM_FPKG_CACHE_DEFAULT_ROOT, title_id, previous_generation_name,
       begin_fpkg_cache_cleanup, end_fpkg_cache_cleanup, NULL);
   if (status != SM_FPKG_OK && status != SM_FPKG_CANCELLED)
     log_debug("  [FPKG] old cache retained: title=%s path=%s status=%d",
@@ -643,6 +649,11 @@ void process_scan_candidates(const scan_candidate_t *candidates,
     bool has_src_snd0 = false;
     bool use_app_install_all =
         runtime_config().app_install_all_enabled && !c->in_app_db;
+    const char *previous_generation_name = NULL;
+    if (candidates[i].fpkg && previous_fpkg_generation[0]) {
+      const char *slash = strrchr(previous_fpkg_generation, '/');
+      previous_generation_name = slash ? slash + 1 : previous_fpkg_generation;
+    }
     if (c->installed) {
       log_debug("  [ACTION] Remounting: %s", c->title_name);
     } else {
@@ -665,7 +676,11 @@ void process_scan_candidates(const scan_candidate_t *candidates,
                                  c->title_name);
       }
       if (use_app_install_all) {
-        if (!sm_install_queue_candidate(c, has_src_snd0)) {
+        const char *previous_generation = candidates[i].fpkg
+            ? previous_generation_name
+            : NULL;
+        if (!sm_install_queue_candidate(c, has_src_snd0,
+                                        previous_generation)) {
           log_debug("  [REG] Failed to queue staged install: %s (%s)",
                     c->title_name, c->title_id);
           if (should_stop_requested() || runtime_sleep_mode_active())
@@ -686,10 +701,9 @@ void process_scan_candidates(const scan_candidate_t *candidates,
         cache_game_entry(candidates[i].fpkg ? candidates[i].path : c->path,
                          c->title_id, c->title_name);
       }
-      if (candidates[i].fpkg)
-        remove_previous_fpkg_generation(c->title_id,
-                                        previous_fpkg_generation,
-                                        c->path);
+      if (candidates[i].fpkg && !use_app_install_all)
+        sm_install_release_replaced_fpkg_generation(
+            c->title_id, previous_generation_name, c->path);
     } else {
       if (should_stop_requested() || runtime_sleep_mode_active())
         return;

@@ -994,6 +994,8 @@
                   <option value="full" data-i18n="fakelibFull">Full</option><option value="emulators" data-i18n="fakelibEmulators">Emulators only</option><option value="disabled" data-i18n="fakelibDisabled">Disabled</option>
                 </select></label>
                 <p class="subtle console-hint" data-i18n="fakelibNextLaunch">Changes apply on the next game launch.</p>
+                <label class="check console-setting"><span data-i18n="fpkgDirectMount">Direct-mount plaintext debug FPKG</span><input id="fpkgDirectMount" form="settingsForm" type="checkbox" role="switch"></label>
+                <p class="subtle console-hint" data-i18n="fpkgDirectMountHint">Experimental. Off by default.</p>
                 <label class="check console-setting"><span data-i18n="updateFakelibEmulators">Update game fakelib emulators</span><input id="updateEmulators" form="settingsForm" type="checkbox" role="switch"></label>
                 <label class="check console-setting"><span data-i18n="autoUpdateAmpr">Update AMPR emulator from GitHub</span><input id="autoUpdateAmpr" form="settingsForm" type="checkbox" role="switch"></label>
               </div>
@@ -3045,6 +3047,14 @@
         if (values.length !== extendedTranslationKeys.length) throw new Error(`Invalid extended translation catalog: ${locale}`);
         Object.assign(translations[locale], Object.fromEntries(extendedTranslationKeys.map((key, index) => [key, values[index]])));
       }
+      Object.assign(translations["en-US"], {
+        fpkgDirectMount: "Direct-mount plaintext debug FPKG",
+        fpkgDirectMountHint: "Experimental. Scans and stages compatible plaintext debug FPKG sources; off by default."
+      });
+      Object.assign(translations["ru-RU"], {
+        fpkgDirectMount: "Прямое монтирование plaintext debug FPKG",
+        fpkgDirectMountHint: "Экспериментально. Сканирует и подготавливает совместимые plaintext debug FPKG; по умолчанию выключено."
+      });
       translations["en-GB"] = translations["en-US"];
       translations["es-MX"] = translations["es-ES"];
       translations["fr-CA"] = translations["fr-FR"];
@@ -3960,6 +3970,7 @@
           $("updateEmulators").checked = Boolean(settings.update_emulators);
           $("fakelibDefaultMode").value = settings.fakelib_default_mode || "full";
           $("autoUpdateAmpr").checked = Boolean(settings.auto_update_ampr);
+          $("fpkgDirectMount").checked = Boolean(settings.fpkg_direct_mount);
           $("autoRemoveMissingGames").checked = Boolean(settings.auto_remove_missing_games);
           $("autoRemoveMissingDelay").value = String(settings.auto_remove_missing_delay_seconds || 300);
           syncAutoRemoveControls();
@@ -4012,6 +4023,7 @@
             update_emulators: $("updateEmulators").checked,
             fakelib_default_mode: $("fakelibDefaultMode").value,
             auto_update_ampr: $("autoUpdateAmpr").checked,
+            fpkg_direct_mount: $("fpkgDirectMount").checked,
             auto_remove_missing_games: $("autoRemoveMissingGames").checked,
             auto_remove_missing_delay_seconds: Number($("autoRemoveMissingDelay").value),
             allow_lan_access: $("allowLanAccess").checked,

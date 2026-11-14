@@ -47,6 +47,7 @@ static inline size_t test_strlcpy(char *dst, const char *src, size_t size) {
 #define MNT_BYFSID 0x08000000
 #endif
 int sceAppInstUtilAppUnInstall(const char *title_id);
+int sceAppInstUtilAppInstallAll(void *reserved);
 int sceKernelUsleep(unsigned int microseconds);
 uint32_t sm_firmware_major_version(void);
 int nmount(struct iovec *iov, unsigned int iov_count, int flags);
