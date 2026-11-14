@@ -4,7 +4,10 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
+
+sys.dont_write_bytecode = True
 
 from test_storage_paths import functions
 
