@@ -46,6 +46,7 @@ jobs:
             autoconf \
             automake \
             build-essential \
+            cargo \
             clang-18 \
             cmake \
             curl \
@@ -61,6 +62,7 @@ jobs:
             pkg-config \
             python3 \
             python3-yaml \
+            rustc \
             xxd \
             zip
 
@@ -69,6 +71,7 @@ jobs:
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c \
+            src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c \
             -o /tmp/sm-fpkg-header-test
           /tmp/sm-fpkg-header-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
@@ -79,6 +82,24 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             tests/test_fpkg_layout.c src/sm_fpkg_layout.c -o /tmp/sm-fpkg-layout-test
           /tmp/sm-fpkg-layout-test
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/test_fpkg_decoder.c src/sm_fpkg_decoder.c \
+            -o /tmp/sm-fpkg-decoder-test
+          /tmp/sm-fpkg-decoder-test
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/test_fpkg_tree.c src/sm_fpkg_tree.c \
+            -o /tmp/sm-fpkg-tree-test
+          /tmp/sm-fpkg-tree-test
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/quer3q/kraken-mount.git \
+            /tmp/kraken-mount-reference
+          git -C /tmp/kraken-mount-reference fetch --depth=1 origin \
+            4b420d579bd381796d773875e36d14c9acaabf39
+          git -C /tmp/kraken-mount-reference checkout --detach FETCH_HEAD
+          python3 tools/test_fpkg_decoder_reference.py \
+            /tmp/kraken-mount-reference
 
       - name: Configure pacman for locally built packages
         run: |

@@ -299,6 +299,11 @@ static sm_fpkg_status_t read_outer_file(
   return remaining == 0 ? SM_FPKG_OK : SM_FPKG_CORRUPT;
 }
 
+static sm_fpkg_status_t image_mount_read(void *ctx, uint64_t offset,
+                                         void *output, size_t size) {
+  return sm_fpkg_image_read(ctx, offset, output, size);
+}
+
 static sm_fpkg_status_t outer_child(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     const uint8_t *dinodes, uint64_t dinode_count, uint32_t directory_inode,
@@ -351,7 +356,8 @@ static sm_fpkg_status_t outer_child(
  */
 static sm_fpkg_status_t validate_outer_metadata(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
-    uint32_t superblock_index, const uint8_t *superblock) {
+    uint32_t superblock_index, uint64_t inner_meta_base,
+    const uint8_t *superblock) {
   uint64_t inode_count = read_le64(superblock + 0x30u);
   uint32_t table_block = read_le32(superblock + 0xD8u);
   uint64_t inode_capacity = SM_FPKG_OUTER_BLOCK_SIZE / SM_FPKG_DINODE_SIZE;
@@ -431,6 +437,19 @@ static sm_fpkg_status_t validate_outer_metadata(
   sm_fpkg_layout_t parsed_layout = {0};
   status = sm_fpkg_layout_parse(descriptor, (size_t)layout_size, image_size,
                                 &parsed_layout);
+  if (status == SM_FPKG_OK) {
+    sm_fpkg_image_reader_t *image = sm_fpkg_image_reader_create(
+        read, ctx, pfs_offset, block_count, image_map, image_mapped,
+        image_size, &parsed_layout);
+    if (!image) {
+      status = SM_FPKG_NOMEM;
+    } else {
+      status = sm_fpkg_tree_validate(
+          image_mount_read, image,
+          parsed_layout.mount_size, inner_meta_base);
+    }
+    sm_fpkg_image_reader_free(image);
+  }
   sm_fpkg_layout_free(&parsed_layout);
 done:
   free(descriptor);
@@ -509,6 +528,7 @@ sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
     return SM_FPKG_CORRUPT;
   sm_fpkg_status_t outer_status = validate_outer_metadata(
       read, ctx, pfs_offset, block_count, (uint32_t)superblock_index,
+      (uint64_t)read_le32(fih + 0x50u) * SM_FPKG_OUTER_BLOCK_SIZE,
       superblock);
   if (outer_status != SM_FPKG_OK)
     return outer_status;

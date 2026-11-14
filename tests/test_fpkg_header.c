@@ -13,7 +13,8 @@
 #define CNT_OFFSET PFS_END
 #define FILE_SIZE (CNT_OFFSET + 0x2000u)
 #define DINODE_SIZE 0x2C8u
-#define DESCRIPTOR_SIZE 95u
+#define INNER_INODE_SIZE 0xA8u
+#define DESCRIPTOR_SIZE 104u
 #define DESCRIPTOR_RECORD_AT 59u
 
 typedef struct {
@@ -48,19 +49,38 @@ static void put_boundary(uint8_t *p, uint64_t value, uint8_t kind) {
 
 static void make_layout_descriptor(uint8_t *bytes) {
   memset(bytes, 0, DESCRIPTOR_SIZE);
-  put_le64(bytes, (UINT64_C(2) << 24) | 3u | (UINT64_C(1) << 32));
-  put_le64(bytes + 8, UINT64_C(2) << 24);
+  put_le64(bytes, (UINT64_C(2) << 24) | 3u | (UINT64_C(2) << 32));
+  put_le64(bytes + 8, UINT64_C(3) << 24);
   put_boundary(bytes + 16, 0, 0);
   put_boundary(bytes + 22, 0x40000u, 0);
-  put_boundary(bytes + 28, 0x40000u, 0);
-  put_boundary(bytes + 34, 0x40000u, 0x40);
+  put_boundary(bytes + 28, 0x80000u, 0);
+  put_boundary(bytes + 34, 0x80000u, 0x40);
   bytes[DESCRIPTOR_RECORD_AT - 1u] = 4;
-  uint8_t *block = bytes + DESCRIPTOR_RECORD_AT + 9u;
-  put_bits(block, 14, 17, (1u << 17) - 1u);
-  put_bits(block, 66, 1, 1);
-  put_bits(block, 68, 4, 4);
-  put_bits(bytes + DESCRIPTOR_RECORD_AT + 18u, 26, 22, 1);
-  put_bits(bytes + DESCRIPTOR_RECORD_AT + 18u, 67, 1, 1);
+  uint8_t *block0 = bytes + DESCRIPTOR_RECORD_AT + 9u;
+  put_bits(block0, 14, 17, (1u << 17) - 1u);
+  uint8_t *block1 = bytes + DESCRIPTOR_RECORD_AT + 18u;
+  put_bits(block1, 14, 17, (1u << 17) - 1u);
+  put_bits(block1, 66, 1, 1);
+  put_bits(block1, 68, 4, 8);
+  put_bits(bytes + DESCRIPTOR_RECORD_AT + 27u, 26, 22, 2);
+}
+
+static void put_inner_image(memory_pkg_t *pkg, uint64_t offset,
+                            const uint8_t *bytes, size_t size) {
+  static const uint32_t outer_blocks[] = {4, 6, 7, 8, 9, 10, 11, 12};
+  size_t done = 0;
+  while (done < size) {
+    uint64_t at = offset + done;
+    size_t map_index = (size_t)(at / OUTER_BLOCK);
+    size_t within = (size_t)(at % OUTER_BLOCK);
+    size_t take = OUTER_BLOCK - within;
+    if (take > size - done) take = size - done;
+    uint64_t package_offset = OUTER_BLOCK +
+                              (uint64_t)outer_blocks[map_index] * OUTER_BLOCK +
+                              within;
+    memcpy(pkg->bytes + package_offset, bytes + done, take);
+    done += take;
+  }
 }
 
 static int memory_read(void *ctx, uint64_t offset, void *out, size_t size) {
@@ -114,10 +134,10 @@ static void valid_envelope(memory_pkg_t *pkg) {
   uint8_t *inodes = pkg->bytes + 2u * OUTER_BLOCK;
   set_dinode(inodes + 0u * DINODE_SIZE, 21, 2);
   set_dinode(inodes + 1u * DINODE_SIZE, 64, 3);
-  set_dinode(inodes + 2u * DINODE_SIZE, 4u * OUTER_BLOCK, 4);
-  put_le32(inodes + 2u * DINODE_SIZE + 0x64u + 36u + 32u, 6);
-  put_le32(inodes + 2u * DINODE_SIZE + 0x64u + 72u + 32u, 7);
-  put_le32(inodes + 2u * DINODE_SIZE + 0x64u + 108u + 32u, 8);
+  set_dinode(inodes + 2u * DINODE_SIZE, 8u * OUTER_BLOCK, 4);
+  for (unsigned i = 1; i < 8; ++i)
+    put_le32(inodes + 2u * DINODE_SIZE + 0x64u + i * 36u + 32u,
+             i == 1 ? 6u : i + 5u);
   set_dinode(inodes + 3u * DINODE_SIZE, DESCRIPTOR_SIZE, 5);
 
   make_dirent(pkg->bytes + 3u * OUTER_BLOCK, 1, "uroot");
@@ -125,15 +145,36 @@ static void valid_envelope(memory_pkg_t *pkg) {
   make_dirent(uroot, 2, "pfs_image.dat");
   make_dirent(uroot + 29, 3, "naps_pkg_layout.dat");
   make_layout_descriptor(pkg->bytes + 6u * OUTER_BLOCK);
+
+  uint8_t inner_superblock[0x40] = {0};
+  put_le64(inner_superblock, 2);
+  put_le64(inner_superblock + 8, 20130315u);
+  put_le32(inner_superblock + 0x20, 0x40000u);
+  put_le64(inner_superblock + 0x30, 5);
+  put_inner_image(pkg, 0, inner_superblock, sizeof(inner_superblock));
+  uint8_t root_inode[INNER_INODE_SIZE] = {0};
+  put_le32(root_inode, 0x4000u);
+  put_inner_image(pkg, 0x40000u + 4u * INNER_INODE_SIZE, root_inode,
+                  sizeof(root_inode));
 }
 
 static void set_indirect_image_file(memory_pkg_t *pkg, uint32_t indirect_data) {
+  static const uint32_t original_map[] = {4, 6, 7, 8, 9, 10, 11, 12};
+  uint8_t image[8u * OUTER_BLOCK];
+  for (unsigned i = 0; i < 8; ++i)
+    memcpy(image + (size_t)i * OUTER_BLOCK,
+           pkg->bytes + OUTER_BLOCK +
+               (size_t)original_map[i] * OUTER_BLOCK,
+           OUTER_BLOCK);
   uint8_t *dinode = pkg->bytes + 2u * OUTER_BLOCK + DINODE_SIZE * 2u;
   put_le64(dinode + 8, 13u * OUTER_BLOCK);
   for (unsigned i = 0; i < 12; ++i)
     put_le32(dinode + 0x64u + i * 36u + 32u, 8u + i);
   put_le32(dinode + 0x64u + 12u * 36u + 32u, 20);
   put_le32(pkg->bytes + 21u * OUTER_BLOCK + 32u, indirect_data);
+  for (unsigned i = 0; i < 8; ++i)
+    memcpy(pkg->bytes + OUTER_BLOCK + (size_t)(8u + i) * OUTER_BLOCK,
+           image + (size_t)i * OUTER_BLOCK, OUTER_BLOCK);
 }
 
 static sm_pkg_info_t metadata(void) {

@@ -1,6 +1,7 @@
 Third-party source attributions for ShadowMountPlus
 
-The native FPKG readers in src/sm_fpkg.c and src/sm_fpkg_layout.c follow format handling in
+The native FPKG readers and Kraken block decoder in src/sm_fpkg.c,
+src/sm_fpkg_layout.c and src/sm_fpkg_decoder.c follow format handling in
 quer3q/kraken-mount, revision 4b420d579bd381796d773875e36d14c9acaabf39,
 licensed GPL-3.0-or-later, and format descriptions attributed there to
 quer3q/ps5-dump-forge (revision 8a3c7d3e4bfeac3b4ddf8e9ff020e819ae8ff1cd),
