@@ -278,6 +278,11 @@ int main(void) {
   int writable_fd = open(writable_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   assert(writable_fd >= 0);
   write_at(writable_fd, "game-created.dat", "persistent", 0600);
+  int saved_fd = openat(writable_fd, "game-created.dat", O_RDONLY | O_NOFOLLOW);
+  assert(saved_fd >= 0);
+  struct timespec saved_times[2] = {{.tv_nsec = UTIME_OMIT},
+                                    {.tv_sec = 123456789, .tv_nsec = 42}};
+  assert(futimens(saved_fd, saved_times) == 0 && close(saved_fd) == 0);
   assert(close(writable_fd) == 0);
   assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
                                         writable_generation, writable_path) == SM_FPKG_OK);
@@ -457,7 +462,8 @@ int main(void) {
   assert(strcmp(next_upper, writable_path));
   char migrated[MAX_PATH];
   assert(snprintf(migrated, sizeof(migrated), "%s/game-created.dat", next_upper) > 0);
-  assert(access(migrated, F_OK) == 0);
+  assert(stat(migrated, &st) == 0 && st.st_mtim.tv_sec == 123456789 &&
+         st.st_mtim.tv_nsec == 42);
   assert(snprintf(migrated, sizeof(migrated), "%s/eboot.bin", next_upper) > 0);
   assert(access(migrated, F_OK) != 0 && errno == ENOENT);
   assert(snprintf(migrated, sizeof(migrated), "%s/game-link", next_upper) > 0);

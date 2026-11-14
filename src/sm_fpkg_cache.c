@@ -1495,9 +1495,11 @@ static bool copy_writable_tree(int source, int destination, const char *prefix,
       int dst = openat(destination, entry->d_name,
                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
       struct stat opened;
+      struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, st.st_mtim};
       ok = dst >= 0 && fstat(src, &opened) == 0 && same_writable_stat(&st, &opened) &&
            copy_writable_tree(src, dst, path, depth + 1u, conflicts, buffer) &&
-           fchmod(dst, st.st_mode & 0777) == 0 && fsync(dst) == 0;
+           fchmod(dst, st.st_mode & 0777) == 0 && futimens(dst, times) == 0 &&
+           fsync(dst) == 0;
       if (dst >= 0) close(dst);
       close(src);
     } else if (S_ISREG(st.st_mode)) {
@@ -1506,6 +1508,7 @@ static bool copy_writable_tree(int source, int destination, const char *prefix,
       int dst = openat(destination, entry->d_name,
                        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
       struct stat opened;
+      struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, st.st_mtim};
       ok = src >= 0 && dst >= 0 && fstat(src, &opened) == 0 &&
            same_writable_stat(&st, &opened);
       while (ok) {
@@ -1516,7 +1519,8 @@ static bool copy_writable_tree(int source, int destination, const char *prefix,
         ok = write_all(dst, buffer, (size_t)count) == SM_FPKG_OK;
       }
       ok = ok && fstat(src, &opened) == 0 && same_writable_stat(&st, &opened) &&
-           fchmod(dst, st.st_mode & 0777) == 0 && fsync(dst) == 0;
+           fchmod(dst, st.st_mode & 0777) == 0 && futimens(dst, times) == 0 &&
+           fsync(dst) == 0;
       if (src >= 0) close(src);
       if (dst >= 0 && close(dst) != 0) ok = false;
     } else if (S_ISLNK(st.st_mode)) {
