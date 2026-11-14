@@ -38,7 +38,7 @@ change. The connected GitHub account has read-only permission on upstream.
 | --- | --- | --- | --- |
 | `crates/kraken-mount-pkg/src/pkg.rs`: FIH/CNT inspection and package open | `sm_pkg_parse_stream` / `sm_pkg_parse_file` in `src/sm_pkg.c` parse package metadata and classify installable content | A separate eligibility decision for full, plaintext PS5 debug FPKG without changing installer classification | `src/sm_fpkg.c`, `include/sm_fpkg.h` |
 | `outer.rs`: PFS geometry, superblock, dinodes, direct/indirect extents | no reader of package outer PFS | Bounded outer filesystem reader and integrity/alias policy | `src/sm_fpkg_outer.c` (or private section of `sm_fpkg.c`) |
-| `tree.rs`: inner PFS entries and paths | scanner handles folders and recognized disk images, not FPKG inner trees | Persist a normalized file index, map file extents and feed extraction planning | `src/sm_fpkg_tree.c` |
+| `tree.rs`: inner PFS entries and paths | scanner handles folders and recognized disk images, not FPKG inner trees | Retain validated file paths and expose bounded file reads to a later extraction planner | `src/sm_fpkg_tree.c`, `src/sm_fpkg_image.c`, `include/sm_fpkg.h` |
 | `kraken.rs`, `decoder/{mod,huff,lz,timing}.rs` | none | Kraken block mapping and decoder | `src/sm_fpkg_layout.c`, `src/sm_fpkg_decoder.c` |
 | `src/ampr_index.rs` | SMP has AMPR update/fakelib support but no AMPR index writer | exact AMPRIDX3 and AMPRPAK4 writer for codec 2 | `src/sm_fpkg_index.c` |
 | `src/cache.rs` | `sm_game_cache.c`, scanner/install queue and SMP state own related caches | FPKG extraction/index cache with owned-file journal; never clear ambiguous cache | extend existing cache owner after design review; no parallel cache daemon |
@@ -145,10 +145,11 @@ Planned implementation areas, gated in order:
    block/boundary cap,
    sparse/shuffle rejection and stored-range overlap checks. The outer metadata
    file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). The descriptor
-   is checked against the declared `pfs_image.dat` size. The probe decodes the
+   is checked against the declared `pfs_image.dat` size. The reader decodes the
    inner image on demand and validates its superblock, inode table and bounded
-   directory tree into a bounded in-memory entry list. It does not yet extract
-   files or produce the normalized AMPR file index. The native decoder
+   directory tree into a bounded in-memory entry list. Its opaque public handle
+   enumerates validated paths and supports range reads from files. It does not
+   yet extract files or produce the normalized AMPR file index. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors
    only. Do not duplicate `sm_pkg` metadata handling.

@@ -5,7 +5,8 @@
  * ps5-dump-forge format references. This probe validates the FIH/CNT envelope,
  * plaintext outer-PFS marker, required outer metadata entries and their bounded
  * block maps, and the Kraken layout descriptor. It does not parse the inner
- * tree or decode Kraken blocks.
+ * tree validation and native Kraken block decoding are performed through the
+ * opaque reader API declared in sm_fpkg.h.
  */
 #include "sm_fpkg.h"
 #include "sm_fpkg_internal.h"
@@ -30,6 +31,18 @@
 #define SM_FPKG_MAX_LAYOUT_SIZE (384u * 1024u * 1024u)
 #define SM_FPKG_CNT_ENTRY_SIZE 0x20u
 #define SM_FPKG_MAX_CNT_ENTRIES 4096u
+
+struct sm_fpkg {
+  sm_pkg_read_fn read;
+  void *read_ctx;
+  uint64_t size;
+  sm_pkg_info_t metadata;
+  uint32_t *image_map;
+  uint64_t image_map_count;
+  sm_fpkg_layout_t layout;
+  sm_fpkg_image_reader_t *image;
+  sm_fpkg_tree_t tree;
+};
 
 static uint32_t read_be32(const uint8_t *bytes) {
   return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
@@ -351,13 +364,13 @@ static sm_fpkg_status_t outer_child(
 
 /*
  * Validate the first outer PFS inode table, required metadata entries and
- * complete direct/indirect mappings for those files. The inner PFS tree remains
- * outside the eligibility probe.
+ * complete direct/indirect mappings for those files, then retain the validated
+ * inner tree and reader state when an opaque handle is requested.
  */
 static sm_fpkg_status_t validate_outer_metadata(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     uint32_t superblock_index, uint64_t inner_meta_base,
-    const uint8_t *superblock) {
+    const uint8_t *superblock, sm_fpkg_t *fpkg) {
   uint64_t inode_count = read_le64(superblock + 0x30u);
   uint32_t table_block = read_le32(superblock + 0xD8u);
   uint64_t inode_capacity = SM_FPKG_OUTER_BLOCK_SIZE / SM_FPKG_DINODE_SIZE;
@@ -375,6 +388,9 @@ static sm_fpkg_status_t validate_outer_metadata(
   uint32_t *image_refs = NULL, *layout_refs = NULL;
   uint64_t image_mapped = 0, layout_mapped = 0;
   uint64_t image_ref_count = 0, layout_ref_count = 0;
+  sm_fpkg_layout_t parsed_layout = {0};
+  sm_fpkg_image_reader_t *image = NULL;
+  sm_fpkg_tree_t tree = {0};
   sm_fpkg_status_t status = read_outer_block(
       read, ctx, pfs_offset, block_count, table_block, inode_table);
   if (status != SM_FPKG_OK)
@@ -434,24 +450,40 @@ static sm_fpkg_status_t validate_outer_metadata(
                            layout_mapped, layout_size, descriptor, io_block);
   if (status != SM_FPKG_OK)
     goto done;
-  sm_fpkg_layout_t parsed_layout = {0};
   status = sm_fpkg_layout_parse(descriptor, (size_t)layout_size, image_size,
                                 &parsed_layout);
   if (status == SM_FPKG_OK) {
-    sm_fpkg_image_reader_t *image = sm_fpkg_image_reader_create(
+    image = sm_fpkg_image_reader_create(
         read, ctx, pfs_offset, block_count, image_map, image_mapped,
         image_size, &parsed_layout);
     if (!image) {
       status = SM_FPKG_NOMEM;
     } else {
-      status = sm_fpkg_tree_validate(
+      status = sm_fpkg_tree_open(
           image_mount_read, image,
-          parsed_layout.mount_size, inner_meta_base);
+          parsed_layout.mount_size, inner_meta_base, &tree);
     }
-    sm_fpkg_image_reader_free(image);
   }
-  sm_fpkg_layout_free(&parsed_layout);
+  if (status == SM_FPKG_OK && fpkg) {
+    sm_fpkg_image_reader_free(image);
+    image = NULL;
+    fpkg->image_map = image_map;
+    fpkg->image_map_count = image_mapped;
+    fpkg->layout = parsed_layout;
+    fpkg->tree = tree;
+    image_map = NULL;
+    memset(&parsed_layout, 0, sizeof(parsed_layout));
+    memset(&tree, 0, sizeof(tree));
+    fpkg->image = sm_fpkg_image_reader_create(
+        read, ctx, pfs_offset, block_count, fpkg->image_map,
+        fpkg->image_map_count, image_size, &fpkg->layout);
+    if (!fpkg->image)
+      status = SM_FPKG_NOMEM;
+  }
 done:
+  sm_fpkg_tree_free(&tree);
+  sm_fpkg_image_reader_free(image);
+  sm_fpkg_layout_free(&parsed_layout);
   free(descriptor);
   free(image_map);
   free(layout_map);
@@ -461,9 +493,13 @@ done:
   return status;
 }
 
-sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
-                                      sm_pkg_read_fn read, void *ctx,
-                                      const sm_pkg_info_t *metadata) {
+sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
+                                     sm_pkg_read_fn read, void *ctx,
+                                     const sm_pkg_info_t *metadata,
+                                     sm_fpkg_t **fpkg_out) {
+  if (!fpkg_out)
+    return SM_FPKG_CORRUPT;
+  *fpkg_out = NULL;
   if (!name || !read || !metadata || size < SM_FPKG_FIH_SIZE ||
       !pkg_extension(name))
     return SM_FPKG_CORRUPT;
@@ -472,22 +508,32 @@ sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
       !metadata->pkg_classification_confident)
     return SM_FPKG_UNSUPPORTED;
 
+  sm_fpkg_t *fpkg = calloc(1, sizeof(*fpkg));
+  if (!fpkg)
+    return SM_FPKG_NOMEM;
+  fpkg->read = read;
+  fpkg->read_ctx = ctx;
+  fpkg->size = size;
+  fpkg->metadata = *metadata;
+
   uint8_t fih[SM_FPKG_FIH_SIZE];
   int result = read(ctx, 0, fih, sizeof(fih));
-  if (result != 0)
+  if (result != 0) {
+    sm_fpkg_close(fpkg);
     return SM_FPKG_IO;
-  if (read_be32(fih) == 0x7F434E54u)
-    return SM_FPKG_NOT_PS5;
-  if (read_be32(fih) == 0x7F4C4948u)
-    return SM_FPKG_UNSUPPORTED;
-  if (read_be32(fih) != 0x7F464948u)
-    return SM_FPKG_NOT_PS5;
-  if (fih[5] != 0)
-    return SM_FPKG_UNSUPPORTED;
-  if (fih[6] != 3 || fih[7] != 0)
-    return SM_FPKG_UNSUPPORTED;
-  if (read_le32(fih + 0x60) != SM_FPKG_OUTER_BLOCK_SIZE)
-    return SM_FPKG_CORRUPT;
+  }
+  sm_fpkg_status_t early = SM_FPKG_OK;
+  if (read_be32(fih) == 0x7F434E54u) early = SM_FPKG_NOT_PS5;
+  else if (read_be32(fih) == 0x7F4C4948u) early = SM_FPKG_UNSUPPORTED;
+  else if (read_be32(fih) != 0x7F464948u) early = SM_FPKG_NOT_PS5;
+  else if (fih[5] != 0 || fih[6] != 3 || fih[7] != 0)
+    early = SM_FPKG_UNSUPPORTED;
+  else if (read_le32(fih + 0x60) != SM_FPKG_OUTER_BLOCK_SIZE)
+    early = SM_FPKG_CORRUPT;
+  if (early != SM_FPKG_OK) {
+    sm_fpkg_close(fpkg);
+    return early;
+  }
 
   uint64_t pfs_offset = read_le64(fih + 0x10);
   uint64_t pfs_size = read_le64(fih + 0x18);
@@ -498,40 +544,101 @@ sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
       (pfs_size % SM_FPKG_OUTER_BLOCK_SIZE) != 0 ||
       !range_fits(pfs_offset, pfs_size, size) ||
       !range_fits(cnt_offset, SM_FPKG_CNT_HEADER_SIZE, size))
-    return SM_FPKG_CORRUPT;
+    { sm_fpkg_close(fpkg); return SM_FPKG_CORRUPT; }
 
   if (superblock_offset < pfs_offset ||
       ((superblock_offset - pfs_offset) % SM_FPKG_OUTER_BLOCK_SIZE) != 0 ||
       !range_fits(superblock_offset, SM_FPKG_SUPERBLOCK_SIZE,
                   pfs_offset + pfs_size))
-    return SM_FPKG_CORRUPT;
+    { sm_fpkg_close(fpkg); return SM_FPKG_CORRUPT; }
 
   sm_fpkg_status_t cnt_status =
       validate_cnt_table(read, ctx, size, cnt_offset);
-  if (cnt_status != SM_FPKG_OK)
+  if (cnt_status != SM_FPKG_OK) {
+    sm_fpkg_close(fpkg);
     return cnt_status;
+  }
 
   uint8_t superblock[SM_FPKG_SUPERBLOCK_SIZE];
   result = read(ctx, superblock_offset, superblock, sizeof(superblock));
-  if (result != 0)
+  if (result != 0) {
+    sm_fpkg_close(fpkg);
     return SM_FPKG_IO;
+  }
   if (read_le64(superblock) != 2 ||
-      read_le64(superblock + 8) != SM_FPKG_SUPERBLOCK_MAGIC)
+      read_le64(superblock + 8) != SM_FPKG_SUPERBLOCK_MAGIC) {
+    sm_fpkg_close(fpkg);
     return SM_FPKG_CORRUPT;
-  if (memcmp(superblock + 0x370, SM_FPKG_PLAINTEXT_MARKER, 16) != 0)
+  }
+  if (memcmp(superblock + 0x370, SM_FPKG_PLAINTEXT_MARKER, 16) != 0) {
+    sm_fpkg_close(fpkg);
     return SM_FPKG_UNSUPPORTED;
+  }
 
   uint64_t block_count = pfs_size / SM_FPKG_OUTER_BLOCK_SIZE;
   uint64_t superblock_index = (superblock_offset - pfs_offset) /
                               SM_FPKG_OUTER_BLOCK_SIZE;
-  if (block_count > UINT32_MAX || superblock_index > UINT32_MAX)
+  if (block_count > UINT32_MAX || superblock_index > UINT32_MAX) {
+    sm_fpkg_close(fpkg);
     return SM_FPKG_CORRUPT;
+  }
   sm_fpkg_status_t outer_status = validate_outer_metadata(
       read, ctx, pfs_offset, block_count, (uint32_t)superblock_index,
       (uint64_t)read_le32(fih + 0x50u) * SM_FPKG_OUTER_BLOCK_SIZE,
-      superblock);
-  if (outer_status != SM_FPKG_OK)
+      superblock, fpkg);
+  if (outer_status != SM_FPKG_OK) {
+    sm_fpkg_close(fpkg);
     return outer_status;
+  }
 
+  *fpkg_out = fpkg;
   return SM_FPKG_OK;
+}
+
+void sm_fpkg_close(sm_fpkg_t *fpkg) {
+  if (!fpkg) return;
+  sm_fpkg_tree_free(&fpkg->tree);
+  sm_fpkg_image_reader_free(fpkg->image);
+  sm_fpkg_layout_free(&fpkg->layout);
+  free(fpkg->image_map);
+  free(fpkg);
+}
+
+size_t sm_fpkg_file_count(const sm_fpkg_t *fpkg) {
+  return fpkg ? fpkg->tree.count : 0;
+}
+
+bool sm_fpkg_file_at(const sm_fpkg_t *fpkg, size_t index,
+                     sm_fpkg_file_t *file_out) {
+  if (!fpkg || !file_out || index >= fpkg->tree.count) return false;
+  const sm_fpkg_tree_entry_t *entry = &fpkg->tree.entries[index];
+  file_out->path = entry->path;
+  file_out->size = entry->size;
+  file_out->is_directory = entry->is_dir;
+  return true;
+}
+
+sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,
+                                   uint64_t offset, void *output,
+                                   size_t size) {
+  if (!fpkg || index >= fpkg->tree.count || (size && !output))
+    return SM_FPKG_CORRUPT;
+  const sm_fpkg_tree_entry_t *entry = &fpkg->tree.entries[index];
+  if (entry->is_dir || !range_fits(offset, size, entry->size))
+    return SM_FPKG_CORRUPT;
+  if (!size) return SM_FPKG_OK;
+  if (entry->logical_offset > UINT64_MAX - offset)
+    return SM_FPKG_CORRUPT;
+  return sm_fpkg_image_read(fpkg->image, entry->logical_offset + offset,
+                            output, size);
+}
+
+sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
+                                      sm_pkg_read_fn read, void *ctx,
+                                      const sm_pkg_info_t *metadata) {
+  sm_fpkg_t *fpkg = NULL;
+  sm_fpkg_status_t status = sm_fpkg_open_stream(name, size, read, ctx,
+                                                metadata, &fpkg);
+  sm_fpkg_close(fpkg);
+  return status;
 }

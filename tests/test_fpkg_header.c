@@ -14,7 +14,7 @@
 #define FILE_SIZE (CNT_OFFSET + 0x2000u)
 #define DINODE_SIZE 0x2C8u
 #define INNER_INODE_SIZE 0xA8u
-#define DESCRIPTOR_SIZE 104u
+#define DESCRIPTOR_SIZE 113u
 #define DESCRIPTOR_RECORD_AT 59u
 
 typedef struct {
@@ -26,6 +26,11 @@ typedef struct {
 static void put_le32(uint8_t *p, uint32_t v) {
   for (unsigned i = 0; i < 4; ++i)
     p[i] = (uint8_t)(v >> (i * 8));
+}
+
+static void put_le16(uint8_t *p, uint16_t v) {
+  p[0] = (uint8_t)v;
+  p[1] = (uint8_t)(v >> 8);
 }
 
 static void put_le64(uint8_t *p, uint64_t v) {
@@ -49,25 +54,29 @@ static void put_boundary(uint8_t *p, uint64_t value, uint8_t kind) {
 
 static void make_layout_descriptor(uint8_t *bytes) {
   memset(bytes, 0, DESCRIPTOR_SIZE);
-  put_le64(bytes, (UINT64_C(2) << 24) | 3u | (UINT64_C(2) << 32));
-  put_le64(bytes + 8, UINT64_C(3) << 24);
+  put_le64(bytes, (UINT64_C(2) << 24) | 3u | (UINT64_C(3) << 32));
+  put_le64(bytes + 8, UINT64_C(4) << 24);
   put_boundary(bytes + 16, 0, 0);
   put_boundary(bytes + 22, 0x40000u, 0);
   put_boundary(bytes + 28, 0x80000u, 0);
-  put_boundary(bytes + 34, 0x80000u, 0x40);
-  bytes[DESCRIPTOR_RECORD_AT - 1u] = 4;
-  uint8_t *block0 = bytes + DESCRIPTOR_RECORD_AT + 9u;
-  put_bits(block0, 14, 17, (1u << 17) - 1u);
-  uint8_t *block1 = bytes + DESCRIPTOR_RECORD_AT + 18u;
-  put_bits(block1, 14, 17, (1u << 17) - 1u);
-  put_bits(block1, 66, 1, 1);
-  put_bits(block1, 68, 4, 8);
-  put_bits(bytes + DESCRIPTOR_RECORD_AT + 27u, 26, 22, 2);
+  put_boundary(bytes + 34, 0xC0000u, 0);
+  put_boundary(bytes + 40, 0xC0000u, 0x40);
+  bytes[DESCRIPTOR_RECORD_AT - 1u] = 6;
+  for (unsigned i = 0; i < 3; ++i) {
+    uint8_t *block = bytes + DESCRIPTOR_RECORD_AT + 9u + i * 9u;
+    put_bits(block, 14, 17, (1u << 17) - 1u);
+    if (i == 2) {
+      put_bits(block, 66, 1, 1);
+      put_bits(block, 68, 4, 12);
+    }
+  }
+  put_bits(bytes + DESCRIPTOR_RECORD_AT + 36u, 26, 22, 3);
 }
 
 static void put_inner_image(memory_pkg_t *pkg, uint64_t offset,
                             const uint8_t *bytes, size_t size) {
-  static const uint32_t outer_blocks[] = {4, 6, 7, 8, 9, 10, 11, 12};
+  static const uint32_t outer_blocks[] = {4, 6, 7, 8, 9, 10,
+                                           11, 12, 13, 14, 15, 16};
   size_t done = 0;
   while (done < size) {
     uint64_t at = offset + done;
@@ -123,6 +132,7 @@ static void valid_envelope(memory_pkg_t *pkg) {
   put_le64(fih + 0x10, OUTER_BLOCK);
   put_le64(fih + 0x18, PFS_SIZE);
   put_le64(fih + 0x20, OUTER_BLOCK);
+  put_le32(fih + 0x50, 1);
   put_le64(fih + 0x58, CNT_OFFSET);
   set_be32(pkg->bytes + CNT_OFFSET, 0x7F434E54u);
   put_le64(pkg->bytes + OUTER_BLOCK, 2);
@@ -134,8 +144,8 @@ static void valid_envelope(memory_pkg_t *pkg) {
   uint8_t *inodes = pkg->bytes + 2u * OUTER_BLOCK;
   set_dinode(inodes + 0u * DINODE_SIZE, 21, 2);
   set_dinode(inodes + 1u * DINODE_SIZE, 64, 3);
-  set_dinode(inodes + 2u * DINODE_SIZE, 8u * OUTER_BLOCK, 4);
-  for (unsigned i = 1; i < 8; ++i)
+  set_dinode(inodes + 2u * DINODE_SIZE, 12u * OUTER_BLOCK, 4);
+  for (unsigned i = 1; i < 12; ++i)
     put_le32(inodes + 2u * DINODE_SIZE + 0x64u + i * 36u + 32u,
              i == 1 ? 6u : i + 5u);
   set_dinode(inodes + 3u * DINODE_SIZE, DESCRIPTOR_SIZE, 5);
@@ -150,18 +160,33 @@ static void valid_envelope(memory_pkg_t *pkg) {
   put_le64(inner_superblock, 2);
   put_le64(inner_superblock + 8, 20130315u);
   put_le32(inner_superblock + 0x20, 0x40000u);
-  put_le64(inner_superblock + 0x30, 5);
-  put_inner_image(pkg, 0, inner_superblock, sizeof(inner_superblock));
+  put_le64(inner_superblock + 0x30, 6);
+  put_inner_image(pkg, 0x10000u, inner_superblock, sizeof(inner_superblock));
   uint8_t root_inode[INNER_INODE_SIZE] = {0};
-  put_le32(root_inode, 0x4000u);
-  put_inner_image(pkg, 0x40000u + 4u * INNER_INODE_SIZE, root_inode,
+  put_le16(root_inode, 0x4000u);
+  put_le64(root_inode + 8, 25);
+  put_le64(root_inode + 0x60, 0xA0000u);
+  put_inner_image(pkg, 0x50000u + 4u * INNER_INODE_SIZE, root_inode,
                   sizeof(root_inode));
+  uint8_t file_inode[INNER_INODE_SIZE] = {0};
+  put_le16(file_inode, 0x8000u);
+  put_le64(file_inode + 8, 13);
+  put_le64(file_inode + 0x60, 0x2000u);
+  put_inner_image(pkg, 0x50000u + 5u * INNER_INODE_SIZE, file_inode,
+                  sizeof(file_inode));
+  uint8_t dirent[25] = {0};
+  make_dirent(dirent, 5, "eboot.bin");
+  put_le32(dirent + 4, 2);
+  put_inner_image(pkg, 0xA0000u, dirent, sizeof(dirent));
+  static const uint8_t payload[] = "hello native!";
+  put_inner_image(pkg, 0x2000u, payload, sizeof(payload) - 1u);
 }
 
 static void set_indirect_image_file(memory_pkg_t *pkg, uint32_t indirect_data) {
-  static const uint32_t original_map[] = {4, 6, 7, 8, 9, 10, 11, 12};
-  uint8_t image[8u * OUTER_BLOCK];
-  for (unsigned i = 0; i < 8; ++i)
+  static const uint32_t original_map[] = {4, 6, 7, 8, 9, 10,
+                                           11, 12, 13, 14, 15, 16};
+  uint8_t image[12u * OUTER_BLOCK];
+  for (unsigned i = 0; i < 12; ++i)
     memcpy(image + (size_t)i * OUTER_BLOCK,
            pkg->bytes + OUTER_BLOCK +
                (size_t)original_map[i] * OUTER_BLOCK,
@@ -172,7 +197,7 @@ static void set_indirect_image_file(memory_pkg_t *pkg, uint32_t indirect_data) {
     put_le32(dinode + 0x64u + i * 36u + 32u, 8u + i);
   put_le32(dinode + 0x64u + 12u * 36u + 32u, 20);
   put_le32(pkg->bytes + 21u * OUTER_BLOCK + 32u, indirect_data);
-  for (unsigned i = 0; i < 8; ++i)
+  for (unsigned i = 0; i < 12; ++i)
     memcpy(pkg->bytes + OUTER_BLOCK + (size_t)(8u + i) * OUTER_BLOCK,
            image + (size_t)i * OUTER_BLOCK, OUTER_BLOCK);
 }
@@ -190,6 +215,20 @@ int main(void) {
   memory_pkg_t pkg;
   sm_pkg_info_t info = metadata();
   valid_envelope(&pkg);
+  sm_fpkg_t *fpkg = NULL;
+  assert(sm_fpkg_open_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                             &pkg, &info, &fpkg) == SM_FPKG_OK);
+  assert(fpkg && sm_fpkg_file_count(fpkg) == 1);
+  sm_fpkg_file_t file;
+  assert(sm_fpkg_file_at(fpkg, 0, &file));
+  assert(strcmp(file.path, "eboot.bin") == 0 && file.size == 13 &&
+         !file.is_directory);
+  uint8_t payload[13];
+  assert(sm_fpkg_read_file(fpkg, 0, 0, payload, sizeof(payload)) ==
+         SM_FPKG_OK);
+  assert(memcmp(payload, "hello native!", sizeof(payload)) == 0);
+  assert(sm_fpkg_read_file(fpkg, 0, 12, payload, 2) == SM_FPKG_CORRUPT);
+  sm_fpkg_close(fpkg);
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_OK);
 
