@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/shadowkraken-header.png" alt="Cyan and violet kraken data motif surrounding a package tile" width="100%">
   <h1>ShadowKraken</h1>
-  <p><strong>Native plaintext debug FPKG support for ShadowMountPlus</strong></p>
+  <p><strong>Native plaintext debug FPKG pipeline for PS5 homebrew</strong></p>
   <p>
     <a href="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml">
       <img src="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml/badge.svg?branch=feature%2Fkraken-fpkg" alt="PS5 build workflow">
@@ -15,61 +15,81 @@
   <p>
     <a href="#quick-start">Quick start</a> ·
     <a href="#supported-game-formats">Formats</a> ·
-    <a href="#native-fpkg-support-experimental">FPKG setup</a> ·
+    <a href="#native-fpkg-pipeline-experimental">FPKG pipeline</a> ·
     <a href="#configuration">Configuration</a> ·
     <a href="#troubleshooting">Troubleshooting</a>
   </p>
 </div>
 
-**ShadowKraken** is a GPL-3.0 fork of
-[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus). It keeps SMP's
-background scanner, library manager, mount lifecycle, and web interface, and
-adds an experimental native path for supported plaintext debug FPKGs. The
-payload and console UI retain the ShadowMountPlus name; the build output is
-`shadowmountplus.elf`.
+**ShadowKraken** extends the
+[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus) storage and
+lifecycle architecture with a native FPKG preparation path for authorized
+plaintext debug packages. It connects package discovery and parsing to SMP's
+existing title registration, mount, launch, and resource-cleanup flow.
 
 <table>
   <tr>
-    <td><strong>FPKG</strong><br>Experimental · enabled by default</td>
-    <td><strong>Eligible input</strong><br>Self-created, authorized plaintext debug packages</td>
+    <td><strong>Package flow</strong><br>Scan · parse · cache · register · mount · cleanup</td>
+    <td><strong>Package data</strong><br>Read in place · no full-image extraction</td>
   </tr>
   <tr>
-    <td><strong>Build</strong><br><a href="https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml">Download the PS5 ELF artifact</a></td>
-    <td><strong>Console status</strong><br>Build verified · registration and launch need PS5 testing</td>
+    <td><strong>Feature switch</strong><br><code>[fpkg] direct_mount = on</code> by default</td>
+    <td><strong>Validation</strong><br>CI build verified · PS5 lifecycle test pending</td>
   </tr>
 </table>
 
-**[Upstream ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)** ·
-**[Discord community](https://discord.gg/x2Ppvzwjhm)** ·
-**[Report a ShadowKraken issue](https://github.com/MNeroba/ShadowKraken/issues)**
+**[Download a PS5 build](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml)** ·
+**[Report an issue](https://github.com/MNeroba/ShadowKraken/issues)** ·
+**[Discord](https://discord.gg/x2Ppvzwjhm)** ·
+**[ShadowMountPlus source](https://github.com/drakmor/ShadowMountPlus)**
 
 > [!WARNING]
 > Mounting disk images can cause shutdown issues or data corruption, particularly on older firmware. Back up important files and saves before testing. This project requires a jailbroken PS5 and is not intended for an unmodified console.
 
 > [!CAUTION]
-> Native FPKG support is experimental and **enabled by default**. Use it only
-> with self-created, legally owned, and explicitly authorized plaintext debug
-> packages. It does not decrypt packages or bypass signature, license, or
-> platform checks. Disable it with `[fpkg] direct_mount = off`. CI builds the
-> PS5 ELF, but registration, mounting, and game launch still need validation
-> on a PS5 console.
+> The backend is experimental and is intended for self-created, explicitly
+> authorized plaintext debug packages. It does not decrypt package contents
+> or bypass signature, license, or platform checks. The PS5 ELF builds in CI;
+> package registration, mounting, AMPR loading, and game launch still require
+> validation on a PS5 console.
 
-## 💜 Support upstream development
+## Native FPKG pipeline (experimental)
 
-These donation links support the upstream ShadowMountPlus developer:
+The backend connects package handling to ShadowMountPlus's existing lifecycle:
 
-| Method | Address / link |
-| --- | --- |
-| **Card / Boosty** | **[Donate via Boosty](https://boosty.to/drkamor/donate)** |
-| USDT (TRC-20) | `TKaUGEwMm9KBXzEoiaaKYBX2yCHAKASW3p` |
-| USDT (ERC-20) | `0x313dD245dBA957A5560618eA882d08e66aaFb430` |
-| USDT (BEP20) | `0x313dD245dBA957A5560618eA882d08e66aaFb430` |
-| USDC (Solana) | `5kv7j2RbUGaSP1kU1cZWj9jHH7d6rfvxmK6YXTYbH4um` |
-| BTC (Bitcoin) | `bc1q58czpsrhz783hs8878tzlt4gatrjall9ulqduu` |
+`scan → parse → prepare/cache → register → mount → launch → unmount/cleanup`
 
-Please double-check the currency and network before sending a donation.
+The scanner routes supported plaintext debug base-title packages through SMP's
+shared metadata reader. A transactional, ownership-tracked cache stores the
+runtime data and indexes under `/data/shadowmount/fpkg-cache/`; it does not
+extract the complete game image. SMP retains ownership of registration and
+mount lifecycle. At launch, the package parent is exposed read-only at
+`/app0/kraken` for AMPR NG. The original package must remain available at its
+source path. This backend currently routes base titles; updates and DLC are not
+registered through this path.
+
+FPKG routing defaults to on. Place a supported package in a configured scan
+location and keep it at that source path. To disable the backend, set:
+
+```ini
+[fpkg]
+direct_mount = off
+```
+
+The package path does not decrypt content or bypass platform signature,
+license, or registration checks. Unsupported or protected layouts are
+rejected. A compatible AMPR NG runtime is required; SMP uses a compatible
+user-provided runtime when present or its pinned fallback.
+
+Download the `ShadowKraken_PS5_<commit SHA>` artifact from the
+[PS5 build workflow](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml).
+The build and host checks pass. Actual package registration, mount behavior,
+AMPR loading, and launch still require PS5 console validation. See the
+[architecture notes](docs/fpkg-native-architecture.md) and
+[test results and limitations](docs/fpkg-test-results.md).
 
 ## Features
+
 
 - **Automatic game discovery:** scan configured folders, register supported titles, and keep the library up to date.
 - **Folder and image support:** run games stored as extracted folders, UFS2, exFAT, PFS images, and compressed PFS containers.
