@@ -64,8 +64,8 @@ version = 2
 
 [fpkg]
 # Enables scanning and lifecycle integration for supported plaintext debug FPKG.
-# Disabled by default; platform registration and launch checks remain in force.
-# direct_mount = off
+# Enabled by default; set off to disable. Platform checks remain in force.
+direct_mount = on
 
 [fakelib]
 # Sandbox fakelib overlays. Disable the standalone BackPork payload when enabled.

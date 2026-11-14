@@ -174,7 +174,7 @@ static void init_runtime_config_defaults(runtime_config_state_t *state) {
   state->cfg.force_mount = false;
   state->cfg.persistent_image_mounts = false;
   state->cfg.app_install_all_enabled = false;
-  state->cfg.fpkg_direct_mount_enabled = false;
+  state->cfg.fpkg_direct_mount_enabled = true;
   state->cfg.auto_remove_missing_games = false;
   state->cfg.auto_remove_games_with_dlc = false;
   state->cfg.backport_fakelib_enabled = true;

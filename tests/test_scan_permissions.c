@@ -94,7 +94,7 @@ int main(void) {
     packages_seen = 0;
     assert(sm_scan_tree_walk(root, root, 0, 2, &callbacks, NULL));
     assert(files_seen == 1);
-    assert(packages_seen == 0); // The direct-FPKG feature stays opt-in.
+    assert(packages_seen == 0); // An explicit off setting disables package visits.
     fpkg_feature_enabled = true;
     assert(sm_scan_tree_walk(root, root, 0, 2, &callbacks, NULL));
     assert(packages_seen == 1);

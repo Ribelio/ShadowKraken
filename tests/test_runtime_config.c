@@ -233,7 +233,7 @@ static void put_file(const char *path, const char *text) {
 static void test_fpkg_direct_mount_config(void) {
   put_file(CONFIG_FILE, "[config]\nversion=2\n");
   assert(load_runtime_config());
-  assert(!sm_config_fpkg_direct_mount_enabled());
+  assert(sm_config_fpkg_direct_mount_enabled());
 
   assert(sm_config_write_web_settings(false, false, false, false, true,
                                       false, 300, false, 0, NULL, 0,
