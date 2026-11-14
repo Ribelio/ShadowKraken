@@ -8,7 +8,7 @@
 #include "sm_paths.h"
 
 #define SM_FPKG_CACHE_DEFAULT_ROOT FPKG_CACHE_PATH
-#define SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT (512ull * 1024ull * 1024ull)
+#define SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT UINT64_MAX
 
 typedef bool (*sm_fpkg_cache_cancel_fn)(void *ctx);
 

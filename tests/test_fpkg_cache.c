@@ -131,7 +131,7 @@ static int make_generation(int title_fd, const char *name, uint64_t inode) {
   assert(mkdirat(generation_fd, "sce_sys", 0700) == 0);
   assert(mkdirat(generation_fd, "kraken", 0700) == 0);
 
-  write_at(generation_fd, "eboot.bin", "boot", 0644);
+  write_at(generation_fd, "eboot.bin", "boot", 0755);
   int system_fd = openat(generation_fd, "sce_sys",
                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   assert(system_fd >= 0);

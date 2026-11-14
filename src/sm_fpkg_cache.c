@@ -35,6 +35,7 @@ typedef struct {
 
 typedef struct {
   int fd;
+  mode_t mode;
   uint64_t expected_size;
   uint64_t written;
   cache_sink_t *sink;
@@ -46,6 +47,7 @@ static int rename_noreplace(int from_fd, const char *from, int to_fd,
                             const char *to);
 static bool validate_generation_owned_tree(int generation_fd,
                                            const char *title_id);
+static bool generation_executable_modes_valid(int generation_fd);
 
 static bool is_cancelled(const sm_fpkg_cache_options_t *options) {
   return options && options->is_cancelled &&
@@ -322,6 +324,11 @@ static bool is_required_loose_file(const char *path) {
     return true;
   return lower_extension_is(path, ".prx") ||
          lower_extension_is(path, ".sprx") || is_package_fakelib_path(path);
+}
+
+static bool is_executable_file(const char *path) {
+  return !strcasecmp(path, "eboot.bin") || !strcasecmp(path, "eboot2.bin") ||
+         lower_extension_is(path, ".prx") || lower_extension_is(path, ".sprx");
 }
 
 static bool is_ampr_pack_index(const char *path) {
@@ -867,7 +874,8 @@ static bool generation_matches_source(int title_fd,
   bool matches = read_generation_source_metadata(generation_fd, title_id,
                                                  &info) &&
                  source_metadata_matches(source_metadata,
-                                         &info.source_metadata);
+                                         &info.source_metadata) &&
+                 generation_executable_modes_valid(generation_fd);
   close(generation_fd);
   return matches;
 }
@@ -993,6 +1001,30 @@ static sm_fpkg_status_t parse_owned_cache_manifest(
     return SM_FPKG_CORRUPT;
   }
   return SM_FPKG_OK;
+}
+
+static bool generation_executable_modes_valid(int generation_fd) {
+  owned_cache_manifest_t manifest;
+  if (parse_owned_cache_manifest(generation_fd, &manifest) != SM_FPKG_OK)
+    return false;
+  bool valid = true;
+  for (size_t i = 0; valid && i < manifest.count; ++i) {
+    if (!is_executable_file(manifest.files[i].path))
+      continue;
+    int parent_fd = -1;
+    char leaf[NAME_MAX + 1];
+    struct stat st;
+    if (!relative_parent(generation_fd, manifest.files[i].path, false,
+                         &parent_fd, leaf)) {
+      valid = false;
+      break;
+    }
+    valid = fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+            S_ISREG(st.st_mode) && (st.st_mode & 0111) == 0111;
+    close(parent_fd);
+  }
+  free_owned_cache_manifest(&manifest);
+  return valid;
 }
 
 static owned_cache_file_t *find_owned_cache_file(
@@ -1857,6 +1889,7 @@ static sm_fpkg_status_t cache_begin(void *opaque,
   }
   close(parent_fd);
   context->expected_size = file->size;
+  context->mode = is_executable_file(file->path) ? 0755 : 0644;
   context->sink = sink;
   *file_ctx_out = context;
   return SM_FPKG_OK;
@@ -1881,7 +1914,7 @@ static sm_fpkg_status_t cache_finish(void *opaque, bool commit) {
   sm_fpkg_status_t status = SM_FPKG_OK;
   if (commit && file->written != file->expected_size)
     status = SM_FPKG_CORRUPT;
-  if (commit && status == SM_FPKG_OK && fchmod(file->fd, 0644) != 0)
+  if (commit && status == SM_FPKG_OK && fchmod(file->fd, file->mode) != 0)
     status = SM_FPKG_IO;
   if (commit && status == SM_FPKG_OK && fsync(file->fd) != 0)
     status = SM_FPKG_IO;

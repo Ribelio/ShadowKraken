@@ -196,6 +196,13 @@ int main(void) {
   assert(open_status == SM_FPKG_OK);
   assert(fpkg && sm_fpkg_file_count(fpkg) == 4u);
 
+  sm_fpkg_cache_options_t small_limit = {.max_extract_bytes = 1u};
+  char limited_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
+             &small_limit, limited_generation) == SM_FPKG_UNSUPPORTED);
+  assert(limited_generation[0] == '\0');
+
   cancel_context_t cancel = {.cancel_at = 6u};
   sm_fpkg_cache_options_t cancelled_build = {
       .max_extract_bytes = SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT,
@@ -242,11 +249,18 @@ int main(void) {
   assert(snprintf(path, sizeof(path), "%s/eboot.bin", generation_path) > 0);
   int extracted_fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   assert(extracted_fd >= 0);
+  struct stat extracted_stat;
+  assert(fstat(extracted_fd, &extracted_stat) == 0 &&
+         (extracted_stat.st_mode & 0777) == 0755);
   char extracted[13];
   assert(read(extracted_fd, extracted, sizeof(extracted)) ==
          (ssize_t)sizeof(extracted));
   assert(close(extracted_fd) == 0);
   assert(memcmp(extracted, "hello native!", sizeof(extracted)) == 0);
+  assert(chmod(path, 0644) == 0);
+  assert(sm_fpkg_cache_find_current_generation(
+             cache_root, &info, current_generation) == SM_FPKG_UNSUPPORTED);
+  assert(chmod(path, 0755) == 0);
 
   assert(snprintf(path, sizeof(path), "%s/sce_sys/param.json",
                   generation_path) > 0);
@@ -359,6 +373,16 @@ int main(void) {
              cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
              &options, repeated_generation) == SM_FPKG_OK);
   assert(strcmp(repeated_generation, generation_path) == 0);
+  assert(snprintf(path, sizeof(path), "%s/eboot.bin", generation_path) > 0);
+  assert(chmod(path, 0644) == 0);
+  char upgraded_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
+             &options, upgraded_generation) == SM_FPKG_OK);
+  assert(strcmp(upgraded_generation, generation_path) != 0);
+  assert(snprintf(path, sizeof(path), "%s/eboot.bin", upgraded_generation) > 0);
+  assert(stat(path, &extracted_stat) == 0 &&
+         (extracted_stat.st_mode & 0777) == 0755);
   sm_fpkg_close(fpkg);
   assert(close(source_fd) == 0);
   remove_tree(root);
