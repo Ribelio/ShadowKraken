@@ -769,6 +769,9 @@ static bool try_collect_candidate_for_fpkg(
   close(fd);
 
   note_found_title(package_info.title_id);
+  if (!sm_image_index_record_game(full_path, package_info.title_id) &&
+      unstable_found_out)
+    *unstable_found_out = true;
   note_game_cache_source_seen(full_path, package_info.title_id,
                               package_info.title_name);
   if (sm_shellcore_title_is_protected(package_info.title_id))

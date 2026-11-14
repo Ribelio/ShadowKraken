@@ -400,33 +400,9 @@ static bool prepare_image_source(const char *title_id,
 
 static bool restore_cached_fpkg_source(const char *title_id,
                                        const char *generation_path) {
-  if (!sm_config_fpkg_direct_mount_enabled())
-    return false;
-  sm_fpkg_cache_generation_info_t info;
-  if (sm_fpkg_cache_read_generation_info(
-          SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
-          &info) != SM_FPKG_OK)
-    return false;
-  if (!info.source_matches_snapshot &&
-      is_under_image_mount_base(info.source_path)) {
-    char chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
-    size_t count = 0;
-    if (!read_mount_image_chain(title_id, chain, &count) || count == 0 ||
-        !path_exists(chain[0]))
-      return false;
-    for (size_t i = 0; i < count; ++i) {
-      const char *name = strrchr(chain[i], '/');
-      name = name ? name + 1 : chain[i];
-      bool unstable = false;
-      if (!maybe_mount_image_file_with_mode(chain[i], name, &unstable, NULL))
-        return false;
-    }
-    if (sm_fpkg_cache_read_generation_info(
-            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
-            &info) != SM_FPKG_OK)
-      return false;
-  }
-  return info.source_matches_snapshot;
+  char source_path[MAX_PATH];
+  return sm_fakelib_resolve_fpkg_generation_source(
+      title_id, generation_path, source_path);
 }
 
 static bool resumed_runtime_source_ready(const char *title_id,
@@ -494,8 +470,12 @@ static bool prepare_title_runtime(const char *title_id,
     sm_fpkg_cache_generation_info_t generation_info;
     if (sm_fpkg_cache_read_generation_info(
             SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path,
-            &generation_info) != SM_FPKG_OK ||
-        !generation_info.source_matches_snapshot) {
+            &generation_info) != SM_FPKG_OK) {
+      errno = ESTALE;
+      return false;
+    }
+    if (!generation_info.source_matches_snapshot &&
+        !restore_cached_fpkg_source(title_id, source_path)) {
       errno = ESTALE;
       return false;
     }

@@ -19,19 +19,28 @@
 #define INSTALL_WAIT_TIMEOUT_US (300ull * 1000000ull)
 #define INSTALL_POLL_INTERVAL_US (2ull * 1000000ull)
 #define INSTALL_SUBMIT_RETRY_US (2ull * 1000000ull)
+#define FPKG_GENERATION_NAME_BYTES 112u
 
 typedef enum {
   INSTALL_TRACK_NONE = 0,
   INSTALL_TRACK_QUEUED,
   INSTALL_TRACK_SUBMITTED,
   INSTALL_TRACK_CLEANUP,
+  INSTALL_TRACK_RETRY,
 } install_track_state_t;
+
+typedef struct pending_fpkg_generation {
+  char name[FPKG_GENERATION_NAME_BYTES];
+  struct pending_fpkg_generation *next;
+} pending_fpkg_generation_t;
 
 typedef struct {
   char title_id[MAX_TITLE_ID];
   char title_name[MAX_TITLE_NAME];
   char source_path[MAX_PATH];
-  char previous_fpkg_generation[112];
+  pending_fpkg_generation_t *previous_fpkg_generations;
+  pending_fpkg_generation_t *previous_fpkg_generation_tail;
+  size_t previous_fpkg_generation_count;
   char manual_source_path[MAX_PATH];
   uint64_t requested_at_us;
   bool has_src_snd0;
@@ -52,6 +61,73 @@ static bool g_queued_install_submit_failure_notified = false;
 static int count_queued_installs(void);
 static uint8_t note_pending_install_failure(const pending_install_entry_t *entry);
 static void drop_queued_install_entry(pending_install_entry_t *entry);
+
+static bool append_fpkg_generation(pending_install_entry_t *entry,
+                                  const char *generation_name) {
+  if (!generation_name || !generation_name[0])
+    return true;
+  size_t length = strnlen(generation_name, FPKG_GENERATION_NAME_BYTES);
+  if (length == 0 || length >= FPKG_GENERATION_NAME_BYTES)
+    return false;
+  for (pending_fpkg_generation_t *item = entry->previous_fpkg_generations;
+       item; item = item->next)
+    if (strcmp(item->name, generation_name) == 0)
+      return true;
+  pending_fpkg_generation_t *item = calloc(1, sizeof(*item));
+  if (!item)
+    return false;
+  (void)strlcpy(item->name, generation_name, sizeof(item->name));
+  if (entry->previous_fpkg_generation_tail)
+    entry->previous_fpkg_generation_tail->next = item;
+  else
+    entry->previous_fpkg_generations = item;
+  entry->previous_fpkg_generation_tail = item;
+  ++entry->previous_fpkg_generation_count;
+  return true;
+}
+
+static void free_fpkg_generations(pending_install_entry_t *entry) {
+  if (!entry)
+    return;
+  pending_fpkg_generation_t *item = entry->previous_fpkg_generations;
+  while (item) {
+    pending_fpkg_generation_t *next = item->next;
+    free(item);
+    item = next;
+  }
+  entry->previous_fpkg_generations = NULL;
+  entry->previous_fpkg_generation_tail = NULL;
+  entry->previous_fpkg_generation_count = 0;
+}
+
+static bool release_pending_fpkg_generations(
+    pending_install_entry_t *entry) {
+  if (!entry)
+    return false;
+  bool all_released = true;
+  pending_fpkg_generation_t *previous = NULL;
+  pending_fpkg_generation_t *item = entry->previous_fpkg_generations;
+  while (item) {
+    pending_fpkg_generation_t *next = item->next;
+    if (sm_install_release_replaced_fpkg_generation(
+            entry->title_id, item->name, entry->source_path)) {
+      if (previous)
+        previous->next = next;
+      else
+        entry->previous_fpkg_generations = next;
+      if (entry->previous_fpkg_generation_tail == item)
+        entry->previous_fpkg_generation_tail = previous;
+      if (entry->previous_fpkg_generation_count > 0)
+        --entry->previous_fpkg_generation_count;
+      free(item);
+    } else {
+      all_released = false;
+      previous = item;
+    }
+    item = next;
+  }
+  return all_released;
+}
 
 static bool install_queue_active(void) {
   return runtime_config().app_install_all_enabled ||
@@ -163,6 +239,7 @@ static void clear_pending_install_entry(pending_install_entry_t *entry) {
     atomic_fetch_sub_explicit(&g_tracked_install_count, 1,
                               memory_order_release);
   }
+  free_fpkg_generations(entry);
   memset(entry, 0, sizeof(*entry));
   if (g_submitted_install_count <= 0)
     schedule_pending_install_poll(monotonic_time_us());
@@ -175,13 +252,33 @@ static void clear_pending_install_entry(pending_install_entry_t *entry) {
 }
 
 bool is_title_install_pending(const char *title_id) {
-  return find_pending_install_entry(title_id) != NULL;
+  pending_install_entry_t *entry = find_pending_install_entry(title_id);
+  return entry && (entry->state == INSTALL_TRACK_QUEUED ||
+                   entry->state == INSTALL_TRACK_SUBMITTED);
 }
 
 void sm_install_forget_pending_title(const char *title_id) {
   pending_install_entry_t *entry = find_pending_install_entry(title_id);
-  if (entry)
+  if (!entry)
+    return;
+  if (entry->previous_fpkg_generation_count == 0) {
     clear_pending_install_entry(entry);
+    return;
+  }
+  if (entry->state == INSTALL_TRACK_SUBMITTED) {
+    if (g_submitted_install_count > 0)
+      --g_submitted_install_count;
+    atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+  } else if (entry->state == INSTALL_TRACK_QUEUED) {
+    atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+  }
+  entry->state = INSTALL_TRACK_CLEANUP;
+  entry->requested_at_us = 0;
+  entry->registration_confirmed = true;
+  schedule_queued_install_submit(monotonic_time_us());
+  schedule_pending_install_poll(monotonic_time_us());
 }
 
 static void append_batch_install_line(char *message, size_t message_size,
@@ -224,28 +321,24 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
 
   install_track_state_t previous_state = entry->state;
   if (previous_state == INSTALL_TRACK_SUBMITTED)
-    return true;
+    return append_fpkg_generation(entry, previous_fpkg_generation_name);
 
-  char pending_previous_generation[sizeof(entry->previous_fpkg_generation)];
-  pending_previous_generation[0] = '\0';
-  if (previous_state != INSTALL_TRACK_NONE)
-    (void)strlcpy(pending_previous_generation,
-                  entry->previous_fpkg_generation,
-                  sizeof(pending_previous_generation));
+  if (!append_fpkg_generation(entry, previous_fpkg_generation_name))
+    return false;
+  pending_fpkg_generation_t *pending_generations =
+      entry->previous_fpkg_generations;
+  pending_fpkg_generation_t *pending_generation_tail =
+      entry->previous_fpkg_generation_tail;
+  size_t pending_generation_count = entry->previous_fpkg_generation_count;
 
   memset(entry, 0, sizeof(*entry));
   (void)strlcpy(entry->title_id, candidate->title_id, sizeof(entry->title_id));
   (void)strlcpy(entry->title_name, candidate->title_name,
                 sizeof(entry->title_name));
   (void)strlcpy(entry->source_path, candidate->path, sizeof(entry->source_path));
-  if (pending_previous_generation[0])
-    (void)strlcpy(entry->previous_fpkg_generation,
-                  pending_previous_generation,
-                  sizeof(entry->previous_fpkg_generation));
-  else if (previous_fpkg_generation_name)
-    (void)strlcpy(entry->previous_fpkg_generation,
-                  previous_fpkg_generation_name,
-                  sizeof(entry->previous_fpkg_generation));
+  entry->previous_fpkg_generations = pending_generations;
+  entry->previous_fpkg_generation_tail = pending_generation_tail;
+  entry->previous_fpkg_generation_count = pending_generation_count;
   (void)strlcpy(entry->manual_source_path, candidate->manual_source_path,
                 sizeof(entry->manual_source_path));
   entry->manual = candidate->manual;
@@ -256,7 +349,8 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
                               memory_order_release);
     atomic_fetch_add_explicit(&g_registration_pending_count, 1,
                               memory_order_release);
-  } else if (previous_state == INSTALL_TRACK_CLEANUP) {
+  } else if (previous_state == INSTALL_TRACK_CLEANUP ||
+             previous_state == INSTALL_TRACK_RETRY) {
     atomic_fetch_add_explicit(&g_registration_pending_count, 1,
                               memory_order_release);
   }
@@ -265,6 +359,51 @@ bool sm_install_queue_candidate(const scan_candidate_t *candidate,
     g_queued_install_submit_failure_notified = false;
   }
   schedule_queued_install_submit(monotonic_time_us());
+  return true;
+}
+
+bool sm_install_defer_fpkg_generation_cleanup(
+    const char *title_id, const char *previous_fpkg_generation_name,
+    const char *current_path) {
+  if (!title_id || !title_id[0] || !previous_fpkg_generation_name ||
+      !previous_fpkg_generation_name[0] || !current_path || !current_path[0])
+    return false;
+
+  pending_install_entry_t *entry = find_pending_install_entry(title_id);
+  if (!entry)
+    entry = reserve_pending_install_entry(title_id);
+  if (!entry)
+    return false;
+
+  install_track_state_t previous_state = entry->state;
+  if (!append_fpkg_generation(entry, previous_fpkg_generation_name))
+    return false;
+
+  if (previous_state == INSTALL_TRACK_NONE) {
+    pending_fpkg_generation_t *pending_generations =
+        entry->previous_fpkg_generations;
+    pending_fpkg_generation_t *pending_generation_tail =
+        entry->previous_fpkg_generation_tail;
+    size_t pending_generation_count = entry->previous_fpkg_generation_count;
+    memset(entry, 0, sizeof(*entry));
+    entry->previous_fpkg_generations = pending_generations;
+    entry->previous_fpkg_generation_tail = pending_generation_tail;
+    entry->previous_fpkg_generation_count = pending_generation_count;
+    (void)strlcpy(entry->title_id, title_id, sizeof(entry->title_id));
+    (void)strlcpy(entry->source_path, current_path,
+                  sizeof(entry->source_path));
+    entry->state = INSTALL_TRACK_CLEANUP;
+    entry->registration_confirmed = true;
+    atomic_fetch_add_explicit(&g_tracked_install_count, 1,
+                              memory_order_release);
+  } else if (previous_state == INSTALL_TRACK_CLEANUP ||
+             previous_state == INSTALL_TRACK_RETRY) {
+    (void)strlcpy(entry->source_path, current_path,
+                  sizeof(entry->source_path));
+    entry->state = INSTALL_TRACK_CLEANUP;
+    entry->registration_confirmed = true;
+  }
+  schedule_pending_install_poll(monotonic_time_us());
   return true;
 }
 
@@ -289,9 +428,7 @@ static void finalize_pending_install_success(pending_install_entry_t *entry) {
     clear_failed_mount_attempts(entry->title_id);
     entry->registration_confirmed = true;
   }
-  if (!sm_install_release_replaced_fpkg_generation(
-          entry->title_id, entry->previous_fpkg_generation,
-          entry->source_path)) {
+  if (!release_pending_fpkg_generations(entry)) {
     if (entry->state == INSTALL_TRACK_SUBMITTED) {
       if (g_submitted_install_count > 0)
         --g_submitted_install_count;
@@ -314,7 +451,17 @@ static void finalize_pending_install_timeout(pending_install_entry_t *entry) {
   notify_system_l10n(SM_L10N_INSTALL_FAILED_TIMEOUT, entry->title_name,
                      entry->title_id);
   (void)note_pending_install_failure(entry);
-  clear_pending_install_entry(entry);
+  if (entry->previous_fpkg_generation_count > 0) {
+    if (g_submitted_install_count > 0)
+      --g_submitted_install_count;
+    atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+    entry->state = INSTALL_TRACK_RETRY;
+    entry->requested_at_us = 0;
+    schedule_pending_install_poll(monotonic_time_us());
+  } else {
+    clear_pending_install_entry(entry);
+  }
 }
 
 static void poll_pending_installs(void) {
@@ -332,9 +479,7 @@ static void poll_pending_installs(void) {
   for (int i = 0; i < MAX_PENDING; i++) {
     pending_install_entry_t *entry = &g_pending_installs[i];
     if (entry->state == INSTALL_TRACK_CLEANUP) {
-      if (sm_install_release_replaced_fpkg_generation(
-              entry->title_id, entry->previous_fpkg_generation,
-              entry->source_path))
+      if (release_pending_fpkg_generations(entry))
         clear_pending_install_entry(entry);
       continue;
     }
@@ -492,7 +637,20 @@ static void drop_queued_install_entry(pending_install_entry_t *entry) {
 
   log_debug("  [REG] Dropping queued install after retry limit: %s (%s)",
             entry->title_name, entry->title_id);
-  clear_pending_install_entry(entry);
+  if (entry->previous_fpkg_generation_count > 0) {
+    atomic_fetch_sub_explicit(&g_registration_pending_count, 1,
+                              memory_order_release);
+    entry->state = INSTALL_TRACK_RETRY;
+    entry->requested_at_us = 0;
+    if (count_queued_installs() == 0) {
+      g_queued_install_submit_due_us = 0;
+      g_queued_install_batch_announced = false;
+      g_queued_install_submit_failure_notified = false;
+    }
+    schedule_pending_install_poll(monotonic_time_us());
+  } else {
+    clear_pending_install_entry(entry);
+  }
 }
 
 bool sm_install_submit_queued(void) {

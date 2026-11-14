@@ -201,7 +201,7 @@ static unsigned cleanup_end_count;
 static bool begin_cleanup(const char *title_id, const char *generation_path,
                           void *ctx) {
   (void)ctx;
-  assert(strcmp(title_id, TEST_TITLE_ID) == 0);
+  assert(strncmp(title_id, "PPSA", 4) == 0);
   assert(strstr(generation_path, "/gen-") != NULL);
   ++cleanup_begin_count;
   return cleanup_allowed;
@@ -296,6 +296,44 @@ int main(void) {
   assert(strcmp(generation_info.source_path, TEST_SOURCE_PATH) == 0);
   assert(strcmp(generation_info.generation_path, current_generation) == 0);
   assert(!generation_info.source_matches_snapshot);
+
+  char remounted_source_path[MAX_PATH];
+  int remounted_length = snprintf(remounted_source_path,
+                                  sizeof(remounted_source_path),
+                                  "%s/remounted.pkg", cache_root);
+  assert(remounted_length > 0 &&
+         (size_t)remounted_length < sizeof(remounted_source_path));
+  int remounted_fd = open(remounted_source_path,
+                          O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                          0600);
+  assert(remounted_fd >= 0);
+  assert(write(remounted_fd, "pkg", 3) == 3);
+  struct stat remounted_st;
+  assert(fstat(remounted_fd, &remounted_st) == 0);
+  sm_fpkg_cache_generation_info_t remounted_info = {0};
+  (void)strlcpy(remounted_info.source_path, remounted_source_path,
+                sizeof(remounted_info.source_path));
+  remounted_info.source_metadata.source_size = (uint64_t)remounted_st.st_size;
+  remounted_info.source_metadata.source_device =
+      (uint64_t)remounted_st.st_dev + 1u;
+  remounted_info.source_metadata.source_inode =
+      (uint64_t)remounted_st.st_ino + 1u;
+  remounted_info.source_metadata.source_mtime = remounted_st.st_mtime;
+  remounted_info.source_metadata.source_mtime_ns =
+      (uint32_t)remounted_st.st_mtim.tv_nsec;
+  remounted_info.source_metadata.source_ctime = remounted_st.st_ctime;
+  remounted_info.source_metadata.source_ctime_ns =
+      (uint32_t)remounted_st.st_ctim.tv_nsec;
+  assert(!sm_pkg_source_matches(&remounted_info.source_metadata,
+                                &remounted_st));
+  assert(sm_fpkg_cache_source_matches_remounted_image(&remounted_info));
+  ++remounted_info.source_metadata.source_mtime_ns;
+  assert(!sm_fpkg_cache_source_matches_remounted_image(&remounted_info));
+  --remounted_info.source_metadata.source_mtime_ns;
+  ++remounted_info.source_metadata.source_size;
+  assert(!sm_fpkg_cache_source_matches_remounted_image(&remounted_info));
+  assert(close(remounted_fd) == 0);
+  assert(unlink(remounted_source_path) == 0);
 
   int damaged_generation_fd = openat(
       title_fd, active_name,
@@ -393,6 +431,18 @@ int main(void) {
   assert(fstatat(title_fd, orphan_name, &st, AT_SYMLINK_NOFOLLOW) != 0 &&
          errno == ENOENT);
   assert(cleanup_begin_count == 4 && cleanup_end_count == 3);
+
+  char missing_root[MAX_PATH];
+  int missing_root_length = snprintf(missing_root, sizeof(missing_root),
+                                     "%s-missing", cache_root);
+  assert(missing_root_length > 0 &&
+         (size_t)missing_root_length < sizeof(missing_root));
+  assert(sm_fpkg_cache_remove_generation(
+             missing_root, TEST_TITLE_ID, orphan_name, begin_cleanup,
+             end_cleanup, NULL) == SM_FPKG_OK);
+  assert(sm_fpkg_cache_remove_generation(
+             cache_root, "PPSA00002", orphan_name, begin_cleanup,
+             end_cleanup, NULL) == SM_FPKG_OK);
 
   assert(close(title_fd) == 0);
   assert(close(root_fd) == 0);

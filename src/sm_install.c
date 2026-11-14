@@ -20,6 +20,7 @@
 #include "sm_fpkg.h"
 #include "sm_fpkg_cache.h"
 #include "sm_pkg.h"
+#include "sm_fakelib.h"
 
 #include <dlfcn.h>
 
@@ -474,16 +475,11 @@ static bool mount_and_install(const char *src_path, const char *title_id,
   char fpkg_source_path[MAX_PATH];
   if (path_matches_root_or_child(src_path,
                                  SM_FPKG_CACHE_DEFAULT_ROOT)) {
-    sm_fpkg_cache_generation_info_t generation_info;
-    if (sm_fpkg_cache_read_generation_info(
-            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, src_path,
-            &generation_info) != SM_FPKG_OK ||
-        !generation_info.source_matches_snapshot) {
+    if (!sm_fakelib_resolve_fpkg_generation_source(
+            title_id, src_path, fpkg_source_path)) {
       errno = ESTALE;
       return false;
     }
-    (void)strlcpy(fpkg_source_path, generation_info.source_path,
-                  sizeof(fpkg_source_path));
     image_chain_source = fpkg_source_path;
   }
   if (is_under_image_mount_base(image_chain_source)) {
@@ -744,8 +740,12 @@ void process_scan_candidates(const scan_candidate_t *candidates,
                          c->title_id, c->title_name);
       }
       if (candidates[i].fpkg && !use_app_install_all)
-        sm_install_release_replaced_fpkg_generation(
-            c->title_id, previous_generation_name, c->path);
+        if (!sm_install_release_replaced_fpkg_generation(
+                c->title_id, previous_generation_name, c->path) &&
+            !sm_install_defer_fpkg_generation_cleanup(
+                c->title_id, previous_generation_name, c->path))
+          log_debug("  [FPKG] unable to queue old cache cleanup: %s (%s)",
+                    c->title_name, c->title_id);
     } else {
       if (should_stop_requested() || runtime_sleep_mode_active())
         return;

@@ -492,10 +492,12 @@ static bool restore_fpkg_source_image_chain(const char *title_id,
   return stat(source_path, &source_st) == 0 && S_ISREG(source_st.st_mode);
 }
 
-static bool resolve_fpkg_source_directory(const char *title_id,
-                                          const char *generation_path,
-                                          char directory_out[MAX_PATH]) {
-  directory_out[0] = '\0';
+bool sm_fakelib_resolve_fpkg_generation_source(
+    const char *title_id, const char *generation_path,
+    char source_path_out[MAX_PATH]) {
+  if (!source_path_out)
+    return false;
+  source_path_out[0] = '\0';
   if (!sm_config_fpkg_direct_mount_enabled()) {
     errno = ENOTSUP;
     return false;
@@ -519,18 +521,32 @@ static bool resolve_fpkg_source_directory(const char *title_id,
     }
     if (sm_fpkg_cache_read_generation_info(
             SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
-            &info) != SM_FPKG_OK || !info.source_matches_snapshot) {
+            &info) != SM_FPKG_OK ||
+        (!info.source_matches_snapshot &&
+         !sm_fpkg_cache_source_matches_remounted_image(&info))) {
       errno = ESTALE;
       return false;
     }
   }
-  const char *extension = strrchr(info.source_path, '.');
+  (void)strlcpy(source_path_out, info.source_path, MAX_PATH);
+  return true;
+}
+
+static bool resolve_fpkg_source_directory(const char *title_id,
+                                          const char *generation_path,
+                                          char directory_out[MAX_PATH]) {
+  directory_out[0] = '\0';
+  char source_path[MAX_PATH];
+  if (!sm_fakelib_resolve_fpkg_generation_source(
+          title_id, generation_path, source_path))
+    return false;
+  const char *extension = strrchr(source_path, '.');
   if (!extension || strcasecmp(extension, ".pkg") != 0) {
     errno = EINVAL;
     return false;
   }
   char parent[MAX_PATH];
-  (void)strlcpy(parent, info.source_path, sizeof(parent));
+  (void)strlcpy(parent, source_path, sizeof(parent));
   char *slash = strrchr(parent, '/');
   if (!slash) {
     errno = EINVAL;

@@ -21,6 +21,10 @@ void sm_install_service_pending(void);
 bool sm_install_queue_candidate(const scan_candidate_t *candidate,
                                 bool has_src_snd0,
                                 const char *previous_fpkg_generation_name);
+// Retain an already-registered title's superseded cache for guarded retry.
+bool sm_install_defer_fpkg_generation_cleanup(
+    const char *title_id, const char *previous_fpkg_generation_name,
+    const char *current_path);
 // Submit all queued titles when no batch install is currently pending.
 bool sm_install_submit_queued(void);
 // Record retry state for every queued title after a batch submit failure.

@@ -74,6 +74,13 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
     const char *generation_path,
     sm_fpkg_cache_generation_info_t *info_out);
 
+/* After the recorded image chain is reattached, compare the package snapshot
+ * using mount-stable size and timestamps. Device and inode may change across
+ * an md AUTOUNIT remount; sm_pkg_source_matches remains strict for other uses.
+ */
+bool sm_fpkg_cache_source_matches_remounted_image(
+    const sm_fpkg_cache_generation_info_t *info);
+
 /* Remove one inactive immutable generation only after its ownership manifest
  * and complete tree have been validated. The required begin/end callbacks must
  * serialize with SMP lifecycle/mount state; begin returns true only when the

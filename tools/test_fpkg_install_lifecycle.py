@@ -47,16 +47,20 @@ bool wait_for_stability_fast(const char *path, const char *name);
         "append_install_path_component",
         "sm_install_register_title_dir", "mount_and_install"])
     fakelib = functions(root, "src/sm_fakelib.c", [
-        "restore_fpkg_source_image_chain", "resolve_fpkg_source_directory",
+        "restore_fpkg_source_image_chain",
+        "sm_fakelib_resolve_fpkg_generation_source",
+        "resolve_fpkg_source_directory",
         "mount_fpkg_source_directory",
         "has_fpkg_sandbox_layer", "mount_fpkg_source_if_needed"])
+    shellcore = functions(root, "src/sm_shellcore_service.c", [
+        "restore_cached_fpkg_source", "prepare_title_runtime"])
     with tempfile.TemporaryDirectory(prefix="sm-fpkg-install-lifecycle-") as directory:
         build = Path(directory)
         (build / "install_lifecycle.inc").write_text(
             scan_context_type.group(0) + "\n\n" + scan_dependencies +
             "\n" + scan + "\n\n" +
             cache_cancel_type.group(0) + "\n\n" + install + "\n\n" +
-            fakelib, encoding="utf-8")
+            fakelib + "\n\n" + shellcore, encoding="utf-8")
         binary = build / "install_lifecycle"
         command = shlex.split(os.environ.get("CC", "cc")) + [
             "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

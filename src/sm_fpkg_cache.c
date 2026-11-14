@@ -1576,6 +1576,29 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
   return status;
 }
 
+bool sm_fpkg_cache_source_matches_remounted_image(
+    const sm_fpkg_cache_generation_info_t *info) {
+  if (!info || !info->source_path[0] ||
+      info->source_metadata.source_size > (uint64_t)INT64_MAX)
+    return false;
+  int fd = open(info->source_path,
+                O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0)
+    return false;
+  struct stat st;
+  bool matches = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+                 st.st_size >= 0 &&
+                 (uint64_t)st.st_size == info->source_metadata.source_size &&
+                 st.st_mtime == info->source_metadata.source_mtime &&
+                 (uint32_t)st.st_mtim.tv_nsec ==
+                     info->source_metadata.source_mtime_ns &&
+                 (uint64_t)st.st_ctime == info->source_metadata.source_ctime &&
+                 (uint32_t)st.st_ctim.tv_nsec ==
+                     info->source_metadata.source_ctime_ns;
+  close(fd);
+  return matches;
+}
+
 sm_fpkg_status_t sm_fpkg_cache_remove_generation(
     const char *cache_root, const char *title_id,
     const char *generation_name,
@@ -1600,11 +1623,21 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   int root_fd = open_directory_path(normalized_root, false);
   int title_fd = -1, lock_fd = -1, generation_fd = -1;
   owned_cache_manifest_t manifest = {0};
-  if (root_fd < 0 || !safe_cache_directory_fd(root_fd))
+  if (root_fd < 0) {
+    if (errno == ENOENT)
+      status = SM_FPKG_OK;
+    goto cleanup;
+  }
+  if (!safe_cache_directory_fd(root_fd))
     goto cleanup;
   title_fd = openat(root_fd, title_id,
                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (title_fd < 0 || !safe_cache_directory_fd(title_fd))
+  if (title_fd < 0) {
+    if (errno == ENOENT)
+      status = SM_FPKG_OK;
+    goto cleanup;
+  }
+  if (!safe_cache_directory_fd(title_fd))
     goto cleanup;
   lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0)
