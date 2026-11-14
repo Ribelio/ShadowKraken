@@ -5,9 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The inner PFS inode-table block is 64 KiB; Kraken's logical data block is
- * 256 KiB and is a separate size used by the image reader. */
-#define TREE_BLOCK 0x10000u
+/* The superblock's PFS block size positions the inode table. The table itself
+ * is paged in 64 KiB units, with 390 0xa8-byte inode records per page. */
+#define TREE_TABLE_PAGE 0x10000u
 #define TREE_INODE_SIZE 0xa8u
 #define TREE_INODES_PER_BLOCK 390u
 #define TREE_FIRST_DIR_INODE 4u
@@ -72,7 +72,7 @@ static sm_fpkg_status_t read_inode(sm_fpkg_mount_read_fn read, void *ctx,
   uint64_t number = inode_number;
   uint64_t block_index = number / TREE_INODES_PER_BLOCK;
   uint64_t within = (number % TREE_INODES_PER_BLOCK) * TREE_INODE_SIZE;
-  uint64_t inode_offset = block_index * TREE_BLOCK + within;
+  uint64_t inode_offset = block_index * TREE_TABLE_PAGE + within;
   uint64_t offset;
   if (!add_u64(table_at, inode_offset, &offset) ||
       !range_fits(offset, TREE_INODE_SIZE, mount_size))
@@ -185,15 +185,16 @@ sm_fpkg_status_t sm_fpkg_tree_open(sm_fpkg_mount_read_fn read, void *read_ctx,
                                    sm_fpkg_tree_t *tree_out) {
   if (!tree_out) return SM_FPKG_CORRUPT;
   memset(tree_out, 0, sizeof(*tree_out));
-  if (!read || !range_fits(meta_base, TREE_BLOCK, mount_size))
+  if (!read || !range_fits(meta_base, 0x40u, mount_size))
     return SM_FPKG_CORRUPT;
   uint8_t superblock[0x40];
   sm_fpkg_status_t status = read(read_ctx, meta_base, superblock,
                                  sizeof(superblock));
   if (status != SM_FPKG_OK) return status;
+  uint64_t pfs_block_size = read_le32(superblock + 0x20u);
   if (read_le64(superblock) != 2 ||
       read_le64(superblock + 8u) != TREE_SUPERBLOCK_MAGIC ||
-      read_le32(superblock + 0x20u) != TREE_BLOCK)
+      pfs_block_size < TREE_TABLE_PAGE)
     return SM_FPKG_CORRUPT;
   uint64_t inode_count = read_le64(superblock + 0x30u);
   if (inode_count <= TREE_FIRST_DIR_INODE || inode_count > TREE_MAX_INODES)
@@ -202,10 +203,11 @@ sm_fpkg_status_t sm_fpkg_tree_open(sm_fpkg_mount_read_fn read, void *read_ctx,
       inode_count / TREE_INODES_PER_BLOCK +
       (inode_count % TREE_INODES_PER_BLOCK != 0);
   uint64_t table_length, table_at;
-  if (table_blocks == 0 || table_blocks > UINT64_MAX / TREE_BLOCK ||
-      !add_u64(meta_base, TREE_BLOCK, &table_at))
+  if (table_blocks == 0 ||
+      table_blocks > UINT64_MAX / TREE_TABLE_PAGE ||
+      !add_u64(meta_base, pfs_block_size, &table_at))
     return SM_FPKG_CORRUPT;
-  table_length = table_blocks * TREE_BLOCK;
+  table_length = table_blocks * TREE_TABLE_PAGE;
   if (!range_fits(table_at, table_length, mount_size))
     return SM_FPKG_CORRUPT;
   uint64_t table_end = table_at + table_length;

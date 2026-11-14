@@ -24,6 +24,15 @@ typedef struct {
   int fail_read;
 } memory_pkg_t;
 
+/* This fixture opens only callback-backed readers, never an fd-backed source. */
+#ifndef SM_TEST_FPKG_HEADER_EXTERNAL_SOURCE_MATCHES
+bool sm_pkg_source_matches(const sm_pkg_info_t *info, const struct stat *st) {
+  (void)info;
+  (void)st;
+  return false;
+}
+#endif
+
 static void put_le32(uint8_t *p, uint32_t v) {
   for (unsigned i = 0; i < 4; ++i)
     p[i] = (uint8_t)(v >> (i * 8));

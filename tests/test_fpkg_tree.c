@@ -79,6 +79,15 @@ int main(void) {
   assert(tree.count == 1 && strcmp(tree.entries[0].path, "eboot.bin") == 0);
   assert(!tree.entries[0].is_dir && tree.entries[0].logical_offset == 0);
   sm_fpkg_tree_free(&tree);
+
+  memcpy(mount.bytes + 0x40000u, mount.bytes + INODE_TABLE_AT, INNER_BLOCK);
+  memset(mount.bytes + INODE_TABLE_AT, 0, INNER_BLOCK);
+  put_le32(mount.bytes + 0x20u, 0x40000u);
+  assert(sm_fpkg_tree_open(mount_read, &mount, sizeof(mount.bytes),
+                           META_BASE, &tree) == SM_FPKG_OK);
+  assert(tree.count == 1 && strcmp(tree.entries[0].path, "eboot.bin") == 0);
+  assert(!tree.entries[0].is_dir && tree.entries[0].logical_offset == 0);
+  sm_fpkg_tree_free(&tree);
   assert(sm_fpkg_tree_validate(mount_read, &mount, sizeof(mount.bytes),
                                META_BASE) == SM_FPKG_OK);
 

@@ -150,8 +150,11 @@ blockers are in [fpkg-test-results.md](fpkg-test-results.md).
 
 The bounded reader validates FIH/CNT and plaintext outer-PFS metadata, direct and
 indirect maps, the Kraken layout descriptor and the bounded inner tree. It
-supports file reads and block mapping, then builds AMPRIDX3 and AMPRPAK4 codec-2
-records. The transactional cache selects required loose files (`eboot*.bin`,
+uses the inner PFS superblock's block-size field to locate the inode table and
+reads its inode records in 64 KiB pages. Synthetic 64 KiB and 256 KiB block-size
+fixtures cover both layouts. It supports file reads and block mapping, then
+builds AMPRIDX3 and AMPRPAK4 codec-2 records. The transactional cache selects
+required loose files (`eboot*.bin`,
 `sce_sys/**`, `*.prx`, `*.sprx`, and package fakelib trees), writes owned
 metadata and indexes into an immutable generation, checks the source snapshot,
 and atomically changes the per-title active pointer. Recovery does not delete
