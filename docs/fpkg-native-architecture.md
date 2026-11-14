@@ -12,7 +12,7 @@ work. No game package or PS5 SDK is present in the host environment.
 | --- | --- | --- | --- |
 | ShadowMountPlus | `8b1f48e086bed93e1ad53158d1103054e362f54d` (`1.7`) | GPL-3.0 | Upstream default branch is `1.7`. |
 | Kraken Mount | `4b420d579bd381796d773875e36d14c9acaabf39` (`main`) | GPL-3.0-or-later | Reader, decoder, cache, index writer and launch reference. |
-| ampr-emu-ng | `152274fba34636d688aff0c2887196c1c66c300e` (`main`) | GPL-3.0-or-later | Current source includes FPKG mode. Kraken bundles runtime v0.4.0. |
+| ampr-emu-ng | `920e9172b6bf99bd9210361b545e2953659d1e9b` (v0.4.0 source) | GPL-3.0-or-later | Exact source revision corresponding to Kraken's bundled runtime. |
 | bundled AMPR runtime | v0.4.0, SHA-256 `8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218` | GPL-3.0-or-later | Kraken `vendor/ampr-emu-ng/SHA256SUMS`; binary is not copied into SMP. |
 | ps5-dump-forge | `8a3c7d3e4bfeac3b4ddf8e9ff020e819ae8ff1cd` (`main`) | GPL-3.0 | Its Rust tests generate temporary plaintext FPKGs from synthetic files; no game content or fixture binary is shipped. |
 
@@ -74,11 +74,15 @@ existing title lifecycle and mount-state mechanisms.
 | Plain folder | Existing SMP source/mount path | Existing SMP fakelib behavior; PR #200 proposes NG-specific handling | Not console-verified here | Preserve |
 | ZSTD folder | Existing AMPR NG detects `ampr_zstd.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
 | LZ4 folder (`AMPRPAK4`) | Existing AMPR NG detects `ampr_assets.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
-| Plaintext debug FPKG | AMPR NG v0.4.0 source has a distinct `pkg` mode and reads `/app0/kraken.image` | Requires compatible AMPR NG in game fakelib | Source documents support; SMP launch is unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent directory |
+| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | Requires compatible AMPR NG in game fakelib | Source confirms code path; SMP launch is unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent directory |
 
-The main-branch AMPR source and Kraken's bundled v0.4.0 runtime are separate
-pins. Before integration, all binary fields and codec-2 behavior must be checked
-against the exact v0.4.0 source/tag, not inferred from newer `main` behavior.
+The v0.4.0 source was inspected at commit
+`920e9172b6bf99bd9210361b545e2953659d1e9b`. Its `crates/ampr-pkg/src/manifest.rs`
+validates the AMPRPAK4 header, CRCs, record sizes, offsets, page flags and codec
+value 2 for pack 0; `crates/ampr-pkg/src/lib.rs` defines codec 2 as Kraken and
+the full-block flag as `0x10`. The runtime package reader calls the Kraken block
+decoder using worker-owned scratch memory. These source checks establish a
+format target, not acceptance of a future C writer or a console launch result.
 
 ## Trust boundaries and ownership
 
@@ -114,7 +118,7 @@ Evidence below is from Kraken Mount revision
 | `src/cache.rs:103-119` | Extract opens destination with create/truncate and creates parents by path. | Use directory-relative no-follow operations, private staging and exclusive creation. |
 | `src/cache.rs:380-412` | Freshness parse defaults malformed `.done` to an empty value and reports stale. | A stale signal may schedule a safe rebuild; it must never imply cleanup ownership. |
 | `src/launch.rs` session code | Kraken tracks fsids for its mount layers and sandbox path, which is a useful ownership model. | Extend SMP's own mount identity record; never unmount by path alone. |
-| `src/launch.rs` cleanup path | Any force-unmount and timeout branch requires line-by-line review before reuse. | No unconditional `MNT_FORCE`; defer/report on ambiguous ownership. |
+| `src/launch.rs:837-867` | On `EBUSY`, retries every 250 ms for 10 seconds, then attempts one `MNT_FORCE` unmount and drops the session after that attempt. | SMP must retain its ownership/session-generation checks; defer and report if mount identity is ambiguous. Do not copy the forced fallback. |
 | `crates/kraken-mount-pkg/src/outer.rs:1-3` | The reader explicitly says plaintext outer PFS SHA3 fields are not checked. | Do not claim integrity validation. Record the omission; assess whether verification is feasible and bounded. |
 | `outer.rs:77-89` | `parse_dinodes` bounds returned nodes to one supplied block and silently clamps to fit. | Validate inode count against the format and available tables; reject unsupported geometry rather than silently truncate. |
 | `outer.rs:197-223` | Indirect traversal descends by finite level but does not track repeated block aliases. | Bound depth and records, detect invalid alias/cycle patterns, and validate all extents. |

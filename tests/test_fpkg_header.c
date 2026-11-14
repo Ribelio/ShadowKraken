@@ -16,6 +16,8 @@
 
 typedef struct {
   uint8_t bytes[FILE_SIZE];
+  uint64_t fail_offset;
+  int fail_read;
 } memory_pkg_t;
 
 static void put_le32(uint8_t *p, uint32_t v) {
@@ -30,6 +32,8 @@ static void put_le64(uint8_t *p, uint64_t v) {
 
 static int memory_read(void *ctx, uint64_t offset, void *out, size_t size) {
   memory_pkg_t *pkg = ctx;
+  if (pkg->fail_read && offset == pkg->fail_offset)
+    return 5;
   if (offset > sizeof(pkg->bytes) || size > sizeof(pkg->bytes) - offset)
     return 5;
   memcpy(out, pkg->bytes + offset, size);
@@ -125,7 +129,20 @@ int main(void) {
   pkg.bytes[3u * OUTER_BLOCK + 16u] = 'x';
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  put_le32(pkg.bytes + 3u * OUTER_BLOCK + 12u, 15);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  put_le32(pkg.bytes + 3u * OUTER_BLOCK, 4);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  pkg.fail_read = 1;
+  pkg.fail_offset = OUTER_BLOCK;
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_IO);
 
-  puts("synthetic FIH/PFS eligibility boundaries passed");
+  puts("synthetic FIH/PFS eligibility and malformed-input boundaries passed");
   return 0;
 }
