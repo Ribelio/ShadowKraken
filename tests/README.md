@@ -122,3 +122,18 @@ clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
   -Wl,--gc-sections -o /tmp/sm-install-queue-fpkg-test
 /tmp/sm-install-queue-fpkg-test
 ```
+
+The FPKG install lifecycle smoke check compiles the production SMP functions
+for TitleDir registration, title publication, and the `/app0/kraken` sandbox
+layer. It verifies nullfs → `mount.lnk` → registration ordering, rollback when
+link publication fails, the batch registration route, bridge/API result
+preservation, reuse/creation of the launch-time FPKG layer, and the read-only
+FPKG sandbox mount:
+
+```sh
+python3 tools/test_fpkg_install_lifecycle.py
+```
+
+Platform calls are stubbed; this is host evidence for SMP routing and rollback,
+not proof that the PS5 nullfs, AppInstallTitleDir, loader, or launch behavior
+works on-console.

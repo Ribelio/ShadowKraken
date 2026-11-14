@@ -160,6 +160,7 @@ jobs:
             tests/test_install_queue_fpkg.c src/sm_install_queue.c \
             -Wl,--gc-sections -o /tmp/sm-install-queue-fpkg-test
           /tmp/sm-install-queue-fpkg-test
+          python3 tools/test_fpkg_install_lifecycle.py
           python3 tools/test_scan_permissions.py
           python3 tools/test_sandbox_cleanup.py
 
