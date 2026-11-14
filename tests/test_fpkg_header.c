@@ -229,6 +229,49 @@ static bool extract_eboot(const char *path, void *ctx) {
   return strcmp(path, "eboot.bin") == 0;
 }
 
+typedef struct {
+  const char *expected_path;
+  uint8_t bytes[64];
+  size_t size;
+  size_t written;
+  bool begun;
+  bool finished;
+  bool committed;
+  bool cancel_write;
+} memory_sink_t;
+
+static sm_fpkg_status_t sink_begin(void *ctx, const sm_fpkg_file_t *file,
+                                   void **file_ctx_out) {
+  memory_sink_t *sink = ctx;
+  assert(strcmp(file->path, sink->expected_path) == 0);
+  assert(!file->is_directory && file->size <= sizeof(sink->bytes));
+  sink->size = (size_t)file->size;
+  sink->written = 0;
+  sink->begun = true;
+  *file_ctx_out = sink;
+  return SM_FPKG_OK;
+}
+
+static sm_fpkg_status_t sink_write(void *file_ctx, uint64_t offset,
+                                   const void *bytes, size_t size) {
+  memory_sink_t *sink = file_ctx;
+  if (sink->cancel_write)
+    return SM_FPKG_CANCELLED;
+  assert(offset == sink->written && size <= sink->size - sink->written);
+  memcpy(sink->bytes + sink->written, bytes, size);
+  sink->written += size;
+  return SM_FPKG_OK;
+}
+
+static sm_fpkg_status_t sink_finish(void *file_ctx, bool commit) {
+  memory_sink_t *sink = file_ctx;
+  sink->finished = true;
+  sink->committed = commit;
+  if (commit)
+    assert(sink->written == sink->size);
+  return SM_FPKG_OK;
+}
+
 int main(void) {
   memory_pkg_t pkg;
   sm_pkg_info_t info = metadata();
@@ -274,6 +317,23 @@ int main(void) {
   assert(sm_fpkg_read_file(fpkg, 0, 0, payload, sizeof(payload)) ==
          SM_FPKG_OK);
   assert(memcmp(payload, "hello native!", sizeof(payload)) == 0);
+  memory_sink_t sink = {.expected_path = "eboot.bin"};
+  sm_fpkg_extract_sink_t extract_sink = {
+      .begin = sink_begin,
+      .write = sink_write,
+      .finish = sink_finish,
+      .ctx = &sink,
+  };
+  assert(sm_fpkg_extract_file(fpkg, 0, &extract_sink) == SM_FPKG_OK);
+  assert(sink.begun && sink.finished && sink.committed &&
+         sink.written == sizeof(payload));
+  assert(memcmp(sink.bytes, "hello native!", sizeof(payload)) == 0);
+  memset(&sink, 0, sizeof(sink));
+  sink.expected_path = "eboot.bin";
+  sink.cancel_write = true;
+  assert(sm_fpkg_extract_file(fpkg, 0, &extract_sink) ==
+         SM_FPKG_CANCELLED);
+  assert(sink.begun && sink.finished && !sink.committed);
   assert(sm_fpkg_read_file(fpkg, 0, 12, payload, 2) == SM_FPKG_CORRUPT);
   sm_fpkg_close(fpkg);
   valid_envelope(&pkg);

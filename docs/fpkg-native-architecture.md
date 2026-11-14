@@ -153,8 +153,10 @@ Planned implementation areas, gated in order:
    can also map block-aligned file ranges to contiguous package offsets for AMPR
    codec-2 records, and rejects unaligned or discontiguous ranges. The AMPR
    writer can now build indexes from an opened package, with a caller-supplied
-   selection of files that will be staged loose. It still does not write those
-   files to a cache or publish the generated indexes. The native decoder
+   selection of files that will be staged loose. A bounded streaming extraction
+   API feeds a caller-owned staging sink and requests rollback on read/write
+   failure or cancellation. SMP's filesystem cache does not yet provide this
+   sink or publish the generated indexes. The native decoder
    handles raw blocks, literal and match LZ commands, delta literals and
    Huffman-coded arrays; differential coverage currently uses synthetic vectors
    only. Do not duplicate `sm_pkg` metadata handling.

@@ -886,6 +886,47 @@ sm_fpkg_status_t sm_fpkg_file_blocks(const sm_fpkg_t *fpkg, size_t index,
   return collect_file_blocks(fpkg, index, blocks, block_capacity, count_out);
 }
 
+sm_fpkg_status_t sm_fpkg_extract_file(sm_fpkg_t *fpkg, size_t index,
+                                      const sm_fpkg_extract_sink_t *sink) {
+  if (!fpkg || !sink || !sink->begin || !sink->write || !sink->finish ||
+      index >= fpkg->tree.count)
+    return SM_FPKG_CORRUPT;
+  const sm_fpkg_tree_entry_t *entry = &fpkg->tree.entries[index];
+  if (entry->is_dir)
+    return SM_FPKG_UNSUPPORTED;
+  uint8_t *buffer = malloc(64u * 1024u);
+  if (!buffer)
+    return SM_FPKG_NOMEM;
+  sm_fpkg_file_t file = {
+      .path = entry->path,
+      .size = entry->size,
+      .is_directory = false,
+  };
+  void *file_ctx = NULL;
+  sm_fpkg_status_t status = sink->begin(sink->ctx, &file, &file_ctx);
+  if (status != SM_FPKG_OK) {
+    free(buffer);
+    return status;
+  }
+  uint64_t offset = 0;
+  while (offset < entry->size) {
+    size_t amount = entry->size - offset > 64u * 1024u
+                        ? 64u * 1024u
+                        : (size_t)(entry->size - offset);
+    status = sm_fpkg_read_file(fpkg, index, offset, buffer, amount);
+    if (status != SM_FPKG_OK)
+      break;
+    status = sink->write(file_ctx, offset, buffer, amount);
+    if (status != SM_FPKG_OK)
+      break;
+    offset += amount;
+  }
+  sm_fpkg_status_t finish_status = sink->finish(file_ctx,
+                                                 status == SM_FPKG_OK);
+  free(buffer);
+  return status == SM_FPKG_OK ? finish_status : status;
+}
+
 sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,
                                    uint64_t offset, void *output,
                                    size_t size) {

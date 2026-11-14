@@ -34,6 +34,15 @@ typedef struct {
   bool kraken_encoded;
 } sm_fpkg_block_t;
 
+typedef struct {
+  sm_fpkg_status_t (*begin)(void *ctx, const sm_fpkg_file_t *file,
+                            void **file_ctx_out);
+  sm_fpkg_status_t (*write)(void *file_ctx, uint64_t offset,
+                            const void *bytes, size_t size);
+  sm_fpkg_status_t (*finish)(void *file_ctx, bool commit);
+  void *ctx;
+} sm_fpkg_extract_sink_t;
+
 /*
  * Open a validated FPKG reader. The read callback and its context must stay
  * alive until sm_fpkg_close; the handle retains only bounded metadata and one
@@ -58,6 +67,12 @@ sm_fpkg_status_t sm_fpkg_file_blocks(const sm_fpkg_t *fpkg, size_t index,
                                       sm_fpkg_block_t *blocks,
                                       size_t block_capacity,
                                       size_t *count_out);
+/* Stream one validated file through a caller-owned staging sink. The sink
+ * receives ordered ranges and must stage safely; finish(commit=false) is
+ * called after any read/write failure, and finish(commit=true) publishes only
+ * after the complete file has been delivered. */
+sm_fpkg_status_t sm_fpkg_extract_file(sm_fpkg_t *fpkg, size_t index,
+                                      const sm_fpkg_extract_sink_t *sink);
 sm_fpkg_status_t sm_fpkg_read_file(sm_fpkg_t *fpkg, size_t index,
                                    uint64_t offset, void *output,
                                    size_t size);
