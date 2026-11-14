@@ -23,7 +23,7 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | `python3 tools/test_scan_permissions.py` | FAIL (platform) | Existing `tests/host_platform.h` redefines macOS `strlcpy` under `-Werror`. |
 | `python3 tools/test_shellcore_launch.py --sanitize` | PASS | `Launch ownership: abandoned switch recovery, retry identity, fallback, live owner and mutation guards passed`. |
 | `python3 tools/test_sandbox_cleanup.py` | FAIL (platform) | Existing host shim redefines macOS `strlcpy`; macOS headers also lack the expected `fsid_t` declaration with current flags. |
-| `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test && /tmp/sm-fpkg-header-test` | PASS (focused safety test) | Synthetic FIH/PFS eligibility, superblock, bounded inode table, required outer metadata entries, malformed dirent rejection and read-error propagation passed under ASan/UBSan. This validates only the outer metadata probe; it is not a game or real-package compatibility fixture. |
+| `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test && /tmp/sm-fpkg-header-test` | PASS (focused safety test) | Synthetic FIH/PFS eligibility, superblock, bounded inode table, required outer metadata entries, direct/indirect map bounds, alias rejection, malformed dirent rejection and read-error propagation passed under ASan/UBSan. This validates only the outer metadata probe; it is not a game or real-package compatibility fixture. |
 
 These are baseline suite outcomes on this host, not regressions caused by FPKG
 changes. No test was skipped or reported as passing based on source inspection.
@@ -49,7 +49,8 @@ command output or console log therefore does not exist for these cases.
 | G6 Linux CI and release build | NOT RUN; requires a push-capable fork/PR and CI. |
 
 Host-verified functionality includes the new bounded FIH/PFS and outer metadata
-probe against synthetic malformed/eligible envelope bytes and the pre-existing
+probe, including synthetic direct/indirect outer file maps and malformed/eligible
+envelope bytes, and the pre-existing
 SMP launch ownership regression test. No direct FPKG inner file-tree, decoder,
 index, cache, registration, or launch functionality is claimed as implemented
 or verified by this record.

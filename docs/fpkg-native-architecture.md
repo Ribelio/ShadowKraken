@@ -136,8 +136,11 @@ blockers are in [fpkg-test-results.md](fpkg-test-results.md).
 Planned implementation areas, gated in order:
 
 1. `src/sm_fpkg*.c`, `include/sm_fpkg*.h`, host-only FPKG tests and attribution:
-   bounded reader/parser/decoder. The implemented probe currently stops after
-   the outer PFS metadata entries. Do not duplicate `sm_pkg` metadata handling.
+   bounded reader/parser/decoder. The implemented probe validates FIH/CNT,
+   plaintext outer-PFS metadata entries, and their direct/indirect block maps;
+   inner-tree parsing, decoding and extraction are not implemented. Its outer
+   metadata file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). Do not
+   duplicate `sm_pkg` metadata handling.
 2. Native AMPR index writer and byte-comparison tests against pinned reference.
 3. Existing cache owner, with transaction journal, source fingerprint and disabled
    configuration key in `sm_config_mount.c`, config file/API surfaces as needed.

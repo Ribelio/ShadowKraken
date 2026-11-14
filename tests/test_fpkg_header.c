@@ -7,7 +7,7 @@
 #include "sm_fpkg.h"
 
 #define OUTER_BLOCK 0x10000u
-#define OUTER_BLOCK_COUNT 6u
+#define OUTER_BLOCK_COUNT 24u
 #define PFS_SIZE (OUTER_BLOCK * OUTER_BLOCK_COUNT)
 #define PFS_END (OUTER_BLOCK + PFS_SIZE)
 #define CNT_OFFSET PFS_END
@@ -90,6 +90,15 @@ static void valid_envelope(memory_pkg_t *pkg) {
   make_dirent(uroot + 29, 3, "naps_pkg_layout.dat");
 }
 
+static void set_indirect_layout_file(memory_pkg_t *pkg, uint32_t indirect_data) {
+  uint8_t *dinode = pkg->bytes + 2u * OUTER_BLOCK + DINODE_SIZE * 3u;
+  put_le64(dinode + 8, 13u * OUTER_BLOCK);
+  for (unsigned i = 0; i < 12; ++i)
+    put_le32(dinode + 0x64u + i * 36u + 32u, 8u + i);
+  put_le32(dinode + 0x64u + 12u * 36u + 32u, 20);
+  put_le32(pkg->bytes + 21u * OUTER_BLOCK + 32u, indirect_data);
+}
+
 static sm_pkg_info_t metadata(void) {
   sm_pkg_info_t info;
   memset(&info, 0, sizeof(info));
@@ -142,7 +151,15 @@ int main(void) {
   pkg.fail_offset = OUTER_BLOCK;
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_IO);
+  valid_envelope(&pkg);
+  set_indirect_layout_file(&pkg, 21);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_OK);
+  valid_envelope(&pkg);
+  set_indirect_layout_file(&pkg, 8);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
 
-  puts("synthetic FIH/PFS eligibility and malformed-input boundaries passed");
+  puts("synthetic FIH/PFS direct/indirect bounds and malformed-input checks passed");
   return 0;
 }

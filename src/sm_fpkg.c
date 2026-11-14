@@ -2,9 +2,9 @@
  * Native debug-FPKG eligibility reader for ShadowMountPlus.
  *
  * Format behavior follows the GPL-3.0-or-later Kraken Mount reader and its
- * ps5-dump-forge format references. This initial reader validates only the
- * FIH/CNT envelope and plaintext outer-PFS marker; it does not parse the inner
- * tree or decode Kraken blocks.
+ * ps5-dump-forge format references. This probe validates the FIH/CNT envelope,
+ * plaintext outer-PFS marker, required outer metadata entries and their bounded
+ * block maps. It does not parse the inner tree or decode Kraken blocks.
  */
 #include "sm_fpkg.h"
 
@@ -22,6 +22,9 @@
 #define SM_FPKG_DINODE_SIZE 0x2C8u
 #define SM_FPKG_DINODE_DIRECT_OFFSET 0x64u
 #define SM_FPKG_DINODE_DIRECT_COUNT 12u
+#define SM_FPKG_DINODE_INDIRECT_COUNT 5u
+#define SM_FPKG_SIG_SIZE 36u
+#define SM_FPKG_MAX_FILE_BLOCKS (4u * 1024u * 1024u)
 
 static uint32_t read_be32(const uint8_t *bytes) {
   return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
@@ -72,6 +75,122 @@ static bool dinode_block(const uint8_t *dinode, unsigned slot,
   return true;
 }
 
+static int compare_u32(const void *left, const void *right) {
+  uint32_t a = *(const uint32_t *)left;
+  uint32_t b = *(const uint32_t *)right;
+  return (a > b) - (a < b);
+}
+
+static sm_fpkg_status_t collect_indirect_blocks(
+    sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
+    uint32_t table_block, unsigned level, uint64_t needed, uint32_t *mapping,
+    uint64_t *mapped, uint32_t *references, uint64_t *reference_count,
+    uint64_t reference_capacity, uint8_t *tables) {
+  if (level >= SM_FPKG_DINODE_INDIRECT_COUNT ||
+      (uint64_t)table_block >= block_count ||
+      *reference_count >= reference_capacity)
+    return SM_FPKG_CORRUPT;
+  references[(*reference_count)++] = table_block;
+  uint8_t *table = tables + (size_t)level * SM_FPKG_OUTER_BLOCK_SIZE;
+  sm_fpkg_status_t status = read_outer_block(
+      read, ctx, pfs_offset, block_count, table_block, table);
+  if (status != SM_FPKG_OK)
+    return status;
+
+  uint64_t slots = SM_FPKG_OUTER_BLOCK_SIZE / SM_FPKG_SIG_SIZE;
+  for (uint64_t i = 0; i < slots && *mapped < needed; ++i) {
+    uint32_t child = read_le32(table + (size_t)i * SM_FPKG_SIG_SIZE + 32u);
+    if (child == 0 || (uint64_t)child >= block_count ||
+        *reference_count >= reference_capacity)
+      return SM_FPKG_CORRUPT;
+    if (level == 0) {
+      references[(*reference_count)++] = child;
+      mapping[(*mapped)++] = child;
+    } else {
+      status = collect_indirect_blocks(
+          read, ctx, pfs_offset, block_count, child, level - 1, needed,
+          mapping, mapped, references, reference_count, reference_capacity,
+          tables);
+      if (status != SM_FPKG_OK)
+        return status;
+    }
+  }
+  return SM_FPKG_OK;
+}
+
+/* Validate complete data and indirect-table mappings without retaining them. */
+static sm_fpkg_status_t validate_file_map(
+    sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
+    const uint8_t *dinode) {
+  uint64_t file_size = read_le64(dinode + 8u);
+  uint64_t needed = file_size / SM_FPKG_OUTER_BLOCK_SIZE +
+                    (file_size % SM_FPKG_OUTER_BLOCK_SIZE != 0);
+  if (needed == 0 || needed > block_count ||
+      needed > SM_FPKG_MAX_FILE_BLOCKS)
+    return SM_FPKG_CORRUPT;
+
+  uint32_t *mapping = malloc((size_t)needed * sizeof(*mapping));
+  uint64_t reference_capacity = 2u * needed;
+  uint32_t *references =
+      malloc((size_t)reference_capacity * sizeof(*references));
+  uint8_t *tables = malloc(SM_FPKG_DINODE_INDIRECT_COUNT *
+                           SM_FPKG_OUTER_BLOCK_SIZE);
+  if (!mapping || !references || !tables) {
+    free(mapping);
+    free(references);
+    free(tables);
+    return SM_FPKG_NOMEM;
+  }
+
+  uint64_t mapped = 0, reference_count = 0;
+  for (unsigned i = 0; i < SM_FPKG_DINODE_DIRECT_COUNT && mapped < needed;
+       ++i) {
+    uint32_t block;
+    (void)dinode_block(dinode, i, &block);
+    if ((uint64_t)block >= block_count) {
+      free(mapping);
+      free(references);
+      free(tables);
+      return SM_FPKG_CORRUPT;
+    }
+    mapping[mapped++] = block;
+    references[reference_count++] = block;
+  }
+
+  sm_fpkg_status_t status = SM_FPKG_OK;
+  for (unsigned level = 0;
+       level < SM_FPKG_DINODE_INDIRECT_COUNT && mapped < needed; ++level) {
+    size_t at = SM_FPKG_DINODE_DIRECT_OFFSET +
+                SM_FPKG_DINODE_DIRECT_COUNT * SM_FPKG_SIG_SIZE +
+                (size_t)level * SM_FPKG_SIG_SIZE + 32u;
+    uint32_t table_block = read_le32(dinode + at);
+    if (table_block == 0)
+      break;
+    status = collect_indirect_blocks(
+        read, ctx, pfs_offset, block_count, table_block, level, needed,
+        mapping, &mapped, references, &reference_count, reference_capacity,
+        tables);
+    if (status != SM_FPKG_OK)
+      break;
+  }
+  if (status == SM_FPKG_OK && mapped != needed)
+    status = SM_FPKG_CORRUPT;
+  if (status == SM_FPKG_OK) {
+    qsort(references, (size_t)reference_count, sizeof(*references),
+          compare_u32);
+    for (uint64_t i = 1; i < reference_count; ++i) {
+      if (references[i - 1] == references[i]) {
+        status = SM_FPKG_CORRUPT;
+        break;
+      }
+    }
+  }
+  free(mapping);
+  free(references);
+  free(tables);
+  return status;
+}
+
 static sm_fpkg_status_t outer_child(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     const uint8_t *dinodes, uint64_t dinode_count, uint32_t directory_inode,
@@ -115,8 +234,9 @@ static sm_fpkg_status_t outer_child(
 }
 
 /*
- * Validate the first outer PFS inode table and the required metadata entries.
- * Full block mapping and the inner PFS tree are handled by later reader phases.
+ * Validate the first outer PFS inode table, required metadata entries and
+ * complete direct/indirect mappings for those files. The inner PFS tree remains
+ * outside the eligibility probe.
  */
 static sm_fpkg_status_t validate_outer_metadata(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
@@ -156,13 +276,7 @@ static sm_fpkg_status_t validate_outer_metadata(
       inode_table + (size_t)image_inode * SM_FPKG_DINODE_SIZE,
       inode_table + (size_t)layout_inode * SM_FPKG_DINODE_SIZE};
   for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); ++i) {
-    uint64_t file_size = read_le64(files[i] + 8u);
-    uint32_t first_block;
-    if (file_size == 0 || file_size > block_count * SM_FPKG_OUTER_BLOCK_SIZE ||
-        !dinode_block(files[i], 0, &first_block))
-      goto done;
-    status = read_outer_block(read, ctx, pfs_offset, block_count, first_block,
-                              io_block);
+    status = validate_file_map(read, ctx, pfs_offset, block_count, files[i]);
     if (status != SM_FPKG_OK)
       goto done;
   }
