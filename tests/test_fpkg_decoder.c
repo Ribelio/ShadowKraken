@@ -187,6 +187,51 @@ static void test_two_symbol_huffman_array(sm_fpkg_decoder_t *decoder) {
     assert(output[i] == (i % 3u == 1u ? 'B' : 'A'));
 }
 
+static uint32_t next_corpus_value(uint32_t *state) {
+  uint32_t value = *state;
+  value ^= value << 13;
+  value ^= value >> 17;
+  value ^= value << 5;
+  *state = value;
+  return value;
+}
+
+static void test_malformed_input_corpus(sm_fpkg_decoder_t *decoder) {
+  uint32_t random = 0x6d2b79f5u;
+  uint8_t stored[128];
+  uint8_t output[512];
+  for (unsigned iteration = 0; iteration < 16384u; ++iteration) {
+    size_t stored_size = 1u + next_corpus_value(&random) % sizeof(stored);
+    for (size_t i = 0; i < stored_size; ++i)
+      stored[i] = (uint8_t)next_corpus_value(&random);
+
+    switch (iteration & 3u) {
+      case 0:
+        stored[0] &= 0x7fu; /* long raw-array header */
+        break;
+      case 1:
+        stored[0] = (uint8_t)(0x80u | (stored[0] & 0x0fu));
+        break;
+      case 2:
+        stored[0] = (uint8_t)(0x20u | (stored[0] & 0x1fu));
+        break;
+      default:
+        stored[0] = (uint8_t)(0xa0u | (stored[0] & 0x0fu));
+        break;
+    }
+
+    size_t output_size = 1u + next_corpus_value(&random) % sizeof(output);
+    uint32_t even_length = (uint32_t)stored_size;
+    if ((iteration & 7u) == 7u)
+      even_length = 1u + next_corpus_value(&random) % stored_size;
+    uint8_t mode = (uint8_t)(next_corpus_value(&random) & 0x1fu);
+    memset(output, 0xa5, sizeof(output));
+    sm_fpkg_status_t status = sm_fpkg_decode_block(
+        decoder, stored, stored_size, even_length, mode, output, output_size);
+    assert(status >= SM_FPKG_OK && status <= SM_FPKG_CANCELLED);
+  }
+}
+
 int main(void) {
   sm_fpkg_decoder_t *decoder = sm_fpkg_decoder_create();
   assert(decoder);
@@ -197,10 +242,11 @@ int main(void) {
   test_escaped_match_length(decoder);
   test_single_symbol_huffman_array(decoder);
   test_two_symbol_huffman_array(decoder);
+  test_malformed_input_corpus(decoder);
   uint8_t output[16];
   assert(sm_fpkg_decode_block(decoder, NULL, 0, 0, 0, output,
                               sizeof(output)) == SM_FPKG_CORRUPT);
   sm_fpkg_decoder_free(decoder);
-  puts("synthetic Kraken raw, LZ literal, delta and Huffman checks passed");
+  puts("synthetic Kraken decoder vectors and 16,384 malformed-input cases passed");
   return 0;
 }
