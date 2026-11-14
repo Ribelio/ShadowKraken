@@ -54,6 +54,20 @@ clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
 
 It uses synthetic cache records and does not open an FPKG fixture.
 
+The AMPR runtime selector verifies the distinct NG runtime path, scans across
+read boundaries, rejects the upstream AMPR family and fails when NG is absent:
+
+```sh
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  tests/test_ampr_runtime.c src/sm_ampr_runtime.c \
+  -o /tmp/sm-ampr-runtime-test
+/tmp/sm-ampr-runtime-test
+```
+
+This checks runtime identity selection only; it cannot establish PS5 loader or
+codec-2 behavior.
+
 The cache builder also has an end-to-end synthetic plaintext FPKG fixture. It
 checks the FIH/PFS reader, loose-file extraction, AMPR index/manifest creation,
 cancelled staging recovery, atomic generation publication and reuse:

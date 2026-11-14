@@ -25,8 +25,14 @@ Kraken daemon or proprietary game data is part of the planned SMP implementation
 
 PR #200 (`quer3q/ShadowMountPlus`, head `3663a32e56130c722ee0aa77623be5f19d5674ee`)
 is still open against `1.7`, not part of the inspected SMP baseline. It proposes
-recognizing/updating AMPR NG in fakelib; SMP's current fakelib path is reused,
-but the PS5-side AMPR NG selection still needs console verification. PR #206 is
+recognizing/updating AMPR NG in fakelib. This branch uses its distinct
+`<emulators_path>/ampr-emu-ng/libSceAmpr.sprx` storage convention but keeps the
+existing SMP updater's top-level upstream AMPR target separate. Native FPKG
+launch now verifies the NG identity and places that runtime last in the
+SMP-owned fakelib cache, after package, backport and global libraries. This
+does not port PR #200's updater; the NG runtime must already be installed in
+that directory. PS5-side loader selection still needs console verification.
+PR #206 is
 also open against `1.7` (head
 `3596e602f7c1c89faff53d55215fc02e89a48703`); it changes same-title process
 handoff to reuse a prepared/mounted runtime before binding the replacement
@@ -89,7 +95,7 @@ expects it. SMP lifecycle and mount-state code retain ownership through cleanup.
 | Plain folder | Existing SMP source/mount path | Existing SMP fakelib behavior; PR #200 proposes NG-specific handling | Not console-verified here | Preserve |
 | ZSTD folder | Existing AMPR NG detects `ampr_zstd.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
 | LZ4 folder (`AMPRPAK4`) | Existing AMPR NG detects `ampr_assets.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
-| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | SMP composes the package's extracted `fakelib/` or `fakelib2/` using its existing fakelib cache | Host cache/index checks pass; PS5 AMPR selection and launch remain unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent read-only |
+| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | SMP copies the identity-checked runtime from `<emulators_path>/ampr-emu-ng/` last into its owned fakelib cache; when general fakelib is disabled, the cache contains only the required runtime | Host path/identity and fakelib syntax checks pass; codec-2 reads and PS5 launch remain unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent read-only |
 
 The v0.4.0 source was inspected at commit
 `920e9172b6bf99bd9210361b545e2953659d1e9b`. Its `crates/ampr-pkg/src/manifest.rs`
@@ -108,7 +114,7 @@ format target, not acceptance of a future C writer or a console launch result.
 | Cache creation and recovery | `sm_fpkg_cache.c` | Implemented: per-title lock, immutable owned generations, source snapshot, journal, active-pointer publication, recovery inspection, quarantine and ownership-checked cleanup. |
 | Registration and title state | `sm_install.c`, `sm_install_queue.c`, `mount.lnk`, appdb bridge | Implemented through existing SMP path after a generation is validated. Superseded cache cleanup waits for app.db confirmation on asynchronous batch installs. Actual console return codes remain PS5-only. |
 | Game launch, sandbox readiness and switching | lifecycle worker, `sm_shellcore_service.c`, `sm_fakelib.c` | Implemented: revalidate source at runtime preparation and track read-only `/app0/kraken` nullfs in the existing owner. Console mount permissions and launch acceptance remain PS5-only. |
-| Fakelib and package data | `sm_fpkg_cache.c`, `sm_fakelib.c` | Implemented: stage package `fakelib/` and `fakelib2/` loose, omit them from AMPR package data index, and do not mutate immutable generations. Compatible AMPR NG presence/selection remains runtime-dependent. |
+| Fakelib and package data | `sm_fpkg_cache.c`, `sm_fakelib.c`, `sm_ampr_runtime.c` | Implemented: stage package `fakelib/` and `fakelib2/` loose, omit them from AMPR package data index, do not mutate immutable generations, and overlay the identity-checked NG runtime through SMP's versioned fakelib cache. Missing or non-NG runtime blocks FPKG launch preparation. |
 | Elevated mount/appdb calls | PS5 SDK and existing SMP abstractions | Reused without changing platform security checks. Host cannot establish how a particular console firmware accepts or rejects a package. |
 
 Inputs crossing trust boundaries include package bytes, package path components,
@@ -188,9 +194,15 @@ KrakenMount's `launch.rs` mounts the package parent read-only at sandbox
 `/app0/kraken`; SMP now does the same through its tracked Fakelib layer. The
 technical deviation is ownership: SMP records and cleans this mount through its
 existing layer/FSID session instead of KrakenMount's standalone session and
-retry loop. SMP does not force-unmount an ambiguous layer. Compatible AMPR NG is
-also required to consume these indexes; its PS5-side selection and behavior are
-not verified by host tests.
+retry loop. SMP does not force-unmount an ambiguous layer. FPKG launch requires
+an AMPR NG runtime at `<emulators_path>/ampr-emu-ng/libSceAmpr.sprx`; the helper
+checks its embedded `ampr-emu-ng ` marker and fails closed if it is absent or
+has the wrong identity. This is a runtime-family check, not signature or
+license verification. The reference runtime is ampr-emu-ng v0.4.0, SHA-256
+`8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218`; this
+branch checks the family marker, not that digest or the runtime's binary
+signature. Runtime distribution/update remains external to this branch, and
+PS5-side selection and behavior are not verified by host tests.
 
 ## Decision record
 
