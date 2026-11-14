@@ -1,15 +1,31 @@
-# ShadowMountPlus (PS5)
+# ShadowKraken (ShadowMountPlus fork for PS5)
 
-**ShadowMountPlus** is an automated background game mounter and library manager for jailbroken PlayStation 5 consoles. It discovers and registers PS4/PS5 game folders and supported disk images on internal or external storage, then prepares them when launched. A built-in web interface provides library management, installation, file transfers, and configuration.
+**ShadowKraken** is a GPL-3.0 fork of
+[ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus). It keeps SMP's
+background scanner, library manager, mount lifecycle, and web interface, and
+adds an experimental native path for supported plaintext debug FPKGs. The
+payload and console UI retain the ShadowMountPlus name; the build output is
+`shadowmountplus.elf`.
 
-**[Download releases](https://github.com/drakmor/ShadowMountPlus/releases)** · **[Discord community](https://discord.gg/x2Ppvzwjhm)** · **[Report an issue](https://github.com/drakmor/ShadowMountPlus/issues)**
+**[Download PS5 build artifacts](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml)** ·
+**[Upstream ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)** ·
+**[Discord community](https://discord.gg/x2Ppvzwjhm)** ·
+**[Report a ShadowKraken issue](https://github.com/MNeroba/ShadowKraken/issues)**
 
 > [!WARNING]
 > Mounting disk images can cause shutdown issues or data corruption, particularly on older firmware. Back up important files and saves before testing. This project requires a jailbroken PS5 and is not intended for an unmodified console.
 
-## 💜 Support development
+> [!CAUTION]
+> Native FPKG support is experimental and **enabled by default**. Use it only
+> with self-created, legally owned, and explicitly authorized plaintext debug
+> packages. It does not decrypt packages or bypass signature, license, or
+> platform checks. Disable it with `[fpkg] direct_mount = off`. CI builds the
+> PS5 ELF, but registration, mounting, and game launch still need validation
+> on a PS5 console.
 
-If ShadowMountPlus is useful to you, you can support continued development:
+## 💜 Support upstream development
+
+These donation links support the upstream ShadowMountPlus developer:
 
 | Method | Address / link |
 | --- | --- |
@@ -26,6 +42,7 @@ Please double-check the currency and network before sending a donation.
 
 - **Automatic game discovery:** scan configured folders, register supported titles, and keep the library up to date.
 - **Folder and image support:** run games stored as extracted folders, UFS2, exFAT, PFS images, and compressed PFS containers.
+- **Native plaintext debug FPKG path:** discover supported `.pkg` files and route them through SMP's cache, registration, launch, and cleanup lifecycle.
 - **Internal and external storage:** work with the PS5's internal storage and supported USB/external drives.
 - **Web interface:** search and filter the library, manage games and their files, install PKGs, updates, DLC and backports, and monitor operations.
 - **SMB2/SMB3 file management:** connect NAS or PC shares, browse their contents, transfer files, and install content to the console.
@@ -38,10 +55,19 @@ Please double-check the currency and network before sending a donation.
 ## Requirements
 
 - Jailbroken PlayStation 5 with **[kstuff-lite v1.07 or newer](https://github.com/EchoStretch/kstuff-lite)** (including supported firmware 2.00 configurations).
-- The latest compatible `shadowmountplus.elf` from [Releases](https://github.com/drakmor/ShadowMountPlus/releases).
+- A compatible `shadowmountplus.elf` from a successful
+  [ShadowKraken PS5 Build and Release workflow](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml).
+  Download its `ShadowKraken_PS5_<commit SHA>` artifact.
 - A payload sender or a compatible autoloader.
 
 ## Quick start
+
+### Get the payload
+
+Open the [PS5 Build and Release workflow](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml),
+select a successful run, and download its `ShadowKraken_PS5_<commit SHA>` artifact.
+The artifact contains the PS5 `shadowmountplus.elf`; keep the commit SHA with your
+test notes so the build can be identified later.
 
 ### Option 1: Manual payload launch
 
@@ -81,6 +107,7 @@ http://<PS5_IP>:10101
 | `.exfat` | exFAT disk image | For games requiring external-drive-style compatibility |
 | `.ffpfs` | PFS disk image | Supported |
 | `.ffpfsc` | Compressed PFS container holding another supported image | Supported; compression can affect loading performance |
+| **`.pkg`** | Plaintext debug package | Experimental native FPKG backend; see below |
 | Game folder | Extracted game files | Supported in scanned or manually specified paths |
 
 **Choose `.ffpkg` for general use.** Use `.exfat` when a game needs external-drive compatibility; create it with a **64 KB allocation unit**. Compressed `.ffpfsc` containers are best reserved for games without demanding continuous data streaming.
@@ -98,6 +125,41 @@ PPSA12345/
 ```
 
 Do **not** add another enclosing game directory inside the image. A `.ffpfsc` file is different: it contains a supported **nested image**, not loose game files at the container root.
+
+### Native FPKG support (experimental)
+
+The backend detects supported plaintext debug `.pkg` files in configured scan
+locations, validates them with SMP's package and FPKG readers, and prepares an
+ownership-tracked cache under `/data/shadowmount/fpkg-cache/`. It then uses
+SMP's existing TitleDir registration and mount lifecycle. At launch, SMP
+exposes the package parent read-only at `/app0/kraken` for AMPR NG. The original
+package must remain available at its source path.
+
+Here, `.pkg` means a PS5 package, not SMP's `.ffpkg` UFS2 image. The current
+scanner routes packages only when SMP's shared metadata parser confidently
+classifies them as base titles; updates and DLC are not registered by this
+backend.
+
+This does not unpack the complete game image. The cache holds the files and
+indexes required by the mount and runtime path; leave enough free storage for
+those cached files. A compatible AMPR NG runtime is required. SMP uses a
+compatible user-provided runtime when present or its pinned fallback.
+
+The setting defaults to on. To try the backend, place a supported package in a
+configured scan location and leave it available at that path. To disable FPKG
+scanning and routing, add this to `/data/shadowmount/config.ini`:
+
+```ini
+[fpkg]
+direct_mount = off
+```
+
+The backend does not decrypt package contents or bypass platform signature,
+license, or registration checks. Unsupported or protected layouts are rejected.
+The PS5 payload builds in CI; actual package registration, `/app0/kraken`
+mounting, AMPR loading, and launch have not yet been verified on-console. See
+[the architecture and integration notes](docs/fpkg-native-architecture.md) and
+[test results and limitations](docs/fpkg-test-results.md).
 
 ## Game locations and scanning
 
@@ -245,7 +307,7 @@ Most common options are available through the web interface. For complete accept
 | `[scan]` | `path`, `depth`, `interval_seconds` | Library discovery |
 | `[mount]` | `mode`, `persistent_images`, `exfat_backend`, `ufs_backend` | Default image-mount behavior |
 | `[library]` | `install_all`, `remove_missing`, `remove_delay_seconds` | Registration and missing-title cleanup |
-| `[fpkg]` | `direct_mount` | Experimental, on by default. Scans supported plaintext debug FPKGs, builds a verified native cache, and routes titles through SMP registration and launch integration; set `off` to disable. Unsupported packages fail closed and platform checks remain in force |
+| `[fpkg]` | `direct_mount` | Experimental plaintext debug FPKG path; on by default. Set `off` to disable; platform checks remain in force |
 | `[fakelib]` | `enabled`, `default_mode`, `global_enabled`, `global_path` | Fakelib overlays |
 | `[emulators]` | `update_enabled`, `path`, `auto_update_ampr` | Optional emulator-library updates |
 | `[fan]` | `target_temperature` | Optional fan target adjustment |
@@ -376,7 +438,7 @@ To inspect the log, open:
 /data/shadowmount/debug.log
 ```
 
-Debug logging is enabled by default. You can change it with `[general] debug = on` or `off` in `config.ini`. For more detailed diagnostics, see [GitHub Issues](https://github.com/drakmor/ShadowMountPlus/issues) or the [Discord community](https://discord.gg/x2Ppvzwjhm).
+Debug logging is enabled by default. You can change it with `[general] debug = on` or `off` in `config.ini`. For more detailed diagnostics, see [ShadowKraken Issues](https://github.com/MNeroba/ShadowKraken/issues) or the [Discord community](https://discord.gg/x2Ppvzwjhm).
 
 > [!CAUTION]
 > Removing a game's data from the PS5's system settings may also delete related saves. Back up your data before using destructive troubleshooting steps.
@@ -386,7 +448,8 @@ Debug logging is enabled by default. You can change it with `[general] debug = o
 - [Configuration example](config.ini.example) — global settings and defaults.
 - [Profile example](profiles.ini.example) — per-game and per-image options.
 - [API documentation](docs/api.md) — web/API endpoints and integration reference.
-- [Releases](https://github.com/drakmor/ShadowMountPlus/releases) — downloads and release notes.
+- [ShadowKraken Actions](https://github.com/MNeroba/ShadowKraken/actions/workflows/ps5.yml) — PS5 build artifacts by commit SHA.
+- [Upstream ShadowMountPlus releases](https://github.com/drakmor/ShadowMountPlus/releases) — upstream releases, which do not include ShadowKraken-only changes.
 
 ## Credits
 
