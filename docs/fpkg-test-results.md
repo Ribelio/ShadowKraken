@@ -12,7 +12,8 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 - PS5 console: unavailable in this task environment.
 - Linux CI: not run. Upstream GitHub permission is read-only; local commits cannot
   trigger the repository's workflow. The existing Ubuntu PS5 workflow now has a
-  focused ASan/UBSan host-test step for this probe, but it has not executed here.
+  focused ASan/UBSan host-test step for the probe, layout parser and index writer,
+  but it has not executed here.
 
 ## Baseline build and regression suite
 
@@ -26,17 +27,20 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | `python3 tools/test_sandbox_cleanup.py` | FAIL (platform) | Existing host shim redefines macOS `strlcpy`; macOS headers also lack the expected `fsid_t` declaration with current flags. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test && /tmp/sm-fpkg-header-test` | PASS (focused safety test) | Synthetic FIH/PFS eligibility, bounded CNT table and payload extents, superblock, bounded inode table, required outer metadata entries, direct/indirect map bounds, alias rejection, malformed dirent rejection and read-error propagation passed under ASan/UBSan. This validates only the outer metadata probe; it is not a game or real-package compatibility fixture. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_index.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-index-test && /tmp/sm-fpkg-index-test` | PASS (focused safety test) | Synthetic AMPRIDX3/AMPRPAK4 layout, RAW and codec-2 descriptors, CRCs, duplicate/case-folded paths, traversal, invalid UTF-8 and package-bound checks passed under ASan/UBSan. |
+| `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_layout.c src/sm_fpkg_layout.c -o /tmp/sm-fpkg-layout-test && /tmp/sm-fpkg-layout-test` | PASS (focused safety test) | Synthetic raw 256 KiB Kraken descriptor, resource bounds, compression/shuffle rejection, sparse rejection and short input passed under ASan/UBSan. |
 | Temporary focused oracle harness: C writer output parsed with pinned `ampr_format::index::Index::open` and `ampr_pkg::open_pkg` from v0.4.0 source revision `920e9172b6bf99bd9210361b545e2953659d1e9b` | PASS | The AMPR reader accepted a synthetic one-file codec-2 manifest and AMPRIDX3 index. This is format parser acceptance, not byte-identical output comparison or decoded package-chunk readback. Harness and output remained under `/private/tmp`; no reference runtime is included in SMP. |
+| Temporary focused layout oracle: `ps5upload_fpkg::kraken_image::describe` and the C parser consumed the same synthetic descriptor bytes | PASS | Both reported one raw block at logical/stored offset zero, length 256 KiB. The descriptor and harness remained under `/private/tmp`; this is not an FPKG fixture. |
 
-These are baseline suite outcomes on this host, not regressions caused by FPKG
-changes. No test was skipped or reported as passing based on source inspection.
+The existing suite outcomes above are macOS baseline results; the FPKG commands
+are focused implementation checks. No test was reported as passing based on
+source inspection.
 
 ## FPKG matrix status
 
 All T01–T38 are **NOT RUN** because implementation and fixture/PS5 requirements
 are not satisfied yet. Specifically, there are no legal debug-FPKG fixtures,
-no pinned Kraken host oracle execution, no AMPR codec-2 readback, no SDK build,
-and no console. A test fixture hash, reference SHA, SMP SHA, AMPR artifact SHA,
+no full pinned Kraken reader/decoder oracle run, no AMPR codec-2 package readback,
+no SDK build, and no console. A test fixture hash, reference SHA, SMP SHA, AMPR artifact SHA,
 command output or console log therefore does not exist for these cases.
 
 ## Validation gates
@@ -44,16 +48,17 @@ command output or console log therefore does not exist for these cases.
 | Gate | Status |
 | --- | --- |
 | G0 repository/source/license audit | Source and license audit recorded. Baseline PS5 build is blocked by missing SDK. PR #200 is open, not merged. |
-| G1 legal-fixture differential reader tests | NOT MET; only the envelope/CNT/outer-metadata probe exists, with no legal FPKG fixture or inner reader. |
+| G1 legal-fixture differential reader tests | NOT MET; the envelope/CNT/outer-metadata probe and standalone Kraken descriptor parser exist, but there is no legal FPKG fixture, outer-file streaming integration or inner reader. |
 | G2 decoder differential/sanitizer/fuzz gates | NOT MET; no C decoder implementation. |
 | G3 byte-identical indexes and runtime readback | NOT MET; C writer exists and one synthetic output passed the pinned parser, but no byte-identical writer comparison, multi-case manifest coverage or decoded package-chunk readback has run. |
 | G4 safe cache crash/recovery tests | Design contract recorded; implementation and failure injection not run. |
 | G5 PS5 launch/mount lifecycle | PS5-only; NOT RUN. |
 | G6 Linux CI and release build | NOT RUN; requires a push-capable fork/PR and CI. |
 
-Host-verified functionality includes the new bounded FIH/PFS and outer metadata
-probe, including synthetic direct/indirect outer file maps and malformed/eligible
-envelope bytes, and the pre-existing
+Host-verified functionality includes the bounded FIH/PFS/CNT and outer metadata
+probe, the standalone Kraken descriptor parser against a synthetic descriptor
+also accepted by ps5-dump-forge, the AMPR writer against the pinned AMPR parser,
+and the pre-existing
 SMP launch ownership regression test. No direct FPKG inner file-tree, decoder,
 index, cache, registration, or launch functionality is claimed as implemented
 or verified by this record.

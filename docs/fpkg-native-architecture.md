@@ -138,10 +138,13 @@ Planned implementation areas, gated in order:
 1. `src/sm_fpkg*.c`, `include/sm_fpkg*.h`, host-only FPKG tests and attribution:
    bounded reader/parser/decoder. The implemented probe validates the FIH
    header, bounded CNT entry table, plaintext outer-PFS metadata entries, and
-   their direct/indirect block maps;
-   inner-tree parsing, decoding and extraction are not implemented. Its outer
-   metadata file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). Do not
-   duplicate `sm_pkg` metadata handling.
+   their direct/indirect block maps. A standalone Kraken layout parser is also
+   implemented with a 384 MiB descriptor cap, 4,194,304 block/boundary cap,
+   sparse/shuffle rejection and stored-range overlap checks. The outer metadata
+   file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). The reader does
+   not yet stream those outer files into the layout parser, parse the inner
+   tree, decode blocks or extract files. Do not duplicate `sm_pkg` metadata
+   handling.
 2. `src/sm_fpkg_index.c` now builds AMPRIDX3 and AMPRPAK4, including codec-2
    records. One synthetic output passed the pinned AMPR v0.4.0 parser; golden
    byte-comparison, broader record coverage and selected chunk readback remain.

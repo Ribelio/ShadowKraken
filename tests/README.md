@@ -20,6 +20,10 @@ clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   tests/test_fpkg_index.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-index-test
 /tmp/sm-fpkg-index-test
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  tests/test_fpkg_layout.c src/sm_fpkg_layout.c -o /tmp/sm-fpkg-layout-test
+/tmp/sm-fpkg-layout-test
 ```
 
 These tests use synthetic bytes and are not real FPKG compatibility tests.
