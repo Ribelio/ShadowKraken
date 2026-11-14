@@ -8,9 +8,33 @@
 
 #include "sm_fpkg_index.h"
 
-#define PACKAGE_SIZE 0x60000u
-#define CHUNK_OFFSET 0x20000u
-#define CHUNK_SIZE 0x40000u
+#define PACKAGE_SIZE 0x100000u
+#define BLOCK_SIZE 0x40000u
+#define EBOOT_OFFSET 0x20000u
+#define PARAM_OFFSET 0x60000u
+#define STREAM_HEAD_OFFSET 0x80000u
+#define STREAM_TAIL_OFFSET 0xc0000u
+#define PARAM_SIZE 257u
+#define STREAM_TAIL_SIZE 37u
+
+/* This writer-only fixture never opens a source package through sm_fpkg.c. */
+bool sm_pkg_source_matches(const sm_pkg_info_t *info, const struct stat *st) {
+  (void)info;
+  (void)st;
+  return true;
+}
+
+static uint8_t pattern_eboot(size_t index) {
+  return (uint8_t)((index * 29u + index / 113u) & 0xffu);
+}
+
+static uint8_t pattern_stream_head(size_t index) {
+  return (uint8_t)((index * 7u + index / 17u) & 0xffu);
+}
+
+static uint8_t pattern_stream_tail(size_t index) {
+  return (uint8_t)((index * 13u + index / 41u) & 0xffu);
+}
 
 static int write_file(const char *path, const void *bytes, size_t size) {
   FILE *file = fopen(path, "wb");
@@ -38,23 +62,60 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  sm_fpkg_index_chunk_t chunk = {
-      .package_offset = CHUNK_OFFSET,
-      .stored_length = CHUNK_SIZE,
-      .raw_length = CHUNK_SIZE,
-      .even_length = 0x20000u,
-      .mode = 0,
-      .kraken_encoded = true,
+  sm_fpkg_index_chunk_t chunks[4] = {
+      {
+          .package_offset = EBOOT_OFFSET,
+          .stored_length = BLOCK_SIZE,
+          .raw_length = BLOCK_SIZE,
+          .even_length = 0x20000u,
+          .mode = 0,
+          .kraken_encoded = true,
+      },
+      {
+          .package_offset = PARAM_OFFSET,
+          .stored_length = PARAM_SIZE,
+          .raw_length = PARAM_SIZE,
+          .kraken_encoded = false,
+      },
+      {
+          .package_offset = STREAM_HEAD_OFFSET,
+          .stored_length = BLOCK_SIZE,
+          .raw_length = BLOCK_SIZE,
+          .kraken_encoded = false,
+      },
+      {
+          .package_offset = STREAM_TAIL_OFFSET,
+          .stored_length = BLOCK_SIZE,
+          .raw_length = BLOCK_SIZE,
+          .even_length = 0x20000u,
+          .mode = 0,
+          .kraken_encoded = true,
+      },
   };
-  sm_fpkg_index_file_t file = {
-      .path = "eboot.bin",
-      .size = CHUNK_SIZE,
-      .chunks = &chunk,
-      .chunk_count = 1,
+  sm_fpkg_index_file_t files[3] = {
+      {
+          .path = "eboot.bin",
+          .size = BLOCK_SIZE,
+          .chunks = &chunks[0],
+          .chunk_count = 1,
+      },
+      {
+          .path = "sce_sys/param.json",
+          .size = PARAM_SIZE,
+          .chunks = &chunks[1],
+          .chunk_count = 1,
+      },
+      {
+          .path = "assets/stream.bin",
+          .size = BLOCK_SIZE + STREAM_TAIL_SIZE,
+          .chunks = &chunks[2],
+          .chunk_count = 2,
+      },
   };
   sm_fpkg_index_blob_t index = {0}, manifest = {0};
   sm_fpkg_status_t status = sm_fpkg_index_build(
-      &file, 1, PACKAGE_SIZE, 123, &index, &manifest);
+      files, sizeof(files) / sizeof(files[0]), PACKAGE_SIZE, 123, &index,
+      &manifest);
   if (status != SM_FPKG_OK) {
     fprintf(stderr, "AMPR index generation failed: %d\n", status);
     return 1;
@@ -65,8 +126,13 @@ int main(int argc, char **argv) {
     sm_fpkg_index_blob_free(&manifest);
     return 1;
   }
-  for (size_t i = 0; i < CHUNK_SIZE; ++i)
-    package[CHUNK_OFFSET + i] = (uint8_t)((i * 29u + i / 113u) & 0xffu);
+  for (size_t i = 0; i < BLOCK_SIZE; ++i) {
+    package[EBOOT_OFFSET + i] = pattern_eboot(i);
+    package[STREAM_HEAD_OFFSET + i] = pattern_stream_head(i);
+    package[STREAM_TAIL_OFFSET + i] = pattern_stream_tail(i);
+  }
+  for (size_t i = 0; i < PARAM_SIZE; ++i)
+    package[PARAM_OFFSET + i] = (uint8_t)(i ^ 0x5au);
   int result = write_file(index_path, index.data, index.size) |
                write_file(manifest_path, manifest.data, manifest.size) |
                write_file(package_path, package, PACKAGE_SIZE);
