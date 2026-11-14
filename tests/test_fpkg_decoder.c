@@ -244,8 +244,15 @@ int main(void) {
   test_two_symbol_huffman_array(decoder);
   test_malformed_input_corpus(decoder);
   uint8_t output[16];
+  memset(output, 0xa5, sizeof(output));
   assert(sm_fpkg_decode_block(decoder, NULL, 0, 0, 0, output,
-                              sizeof(output)) == SM_FPKG_CORRUPT);
+                              sizeof(output)) == SM_FPKG_OK);
+  for (size_t i = 0; i < sizeof(output); ++i)
+    assert(output[i] == 0);
+  const uint8_t raw[] = {0x31, 0x42, 0x53, 0x64};
+  assert(sm_fpkg_decode_block(decoder, raw, sizeof(raw), sizeof(raw), 0x80,
+                              output, sizeof(raw)) == SM_FPKG_OK);
+  assert(memcmp(output, raw, sizeof(raw)) == 0);
   sm_fpkg_decoder_free(decoder);
   puts("synthetic Kraken decoder vectors and 16,384 malformed-input cases passed");
   return 0;

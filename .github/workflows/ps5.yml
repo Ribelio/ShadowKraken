@@ -110,6 +110,8 @@ jobs:
           git -C kraken-mount-reference checkout --detach FETCH_HEAD
           python3 tools/test_fpkg_decoder_reference.py \
             kraken-mount-reference
+          python3 tools/test_fpkg_decoder_differential.py \
+            kraken-mount-reference
           mkdir -p /tmp/fpkg-ampr-oracle
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             tests/fpkg_ampr_oracle/generate.c src/sm_fpkg_index.c \

@@ -12,7 +12,9 @@ typedef struct sm_fpkg_decoder sm_fpkg_decoder_t;
 sm_fpkg_decoder_t *sm_fpkg_decoder_create(void);
 void sm_fpkg_decoder_free(sm_fpkg_decoder_t *decoder);
 
-/* Decode one described, unshuffled Kraken block (at most 256 KiB). */
+/* Decode one described, unshuffled Kraken block (at most 256 KiB). A zero
+ * stored length with a zero descriptor produces a sparse zero-filled block,
+ * matching the pinned Kraken decoder. */
 sm_fpkg_status_t sm_fpkg_decode_block(sm_fpkg_decoder_t *decoder,
                                       const uint8_t *stored,
                                       size_t stored_size,

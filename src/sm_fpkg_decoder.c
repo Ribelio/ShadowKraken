@@ -588,13 +588,19 @@ sm_fpkg_status_t sm_fpkg_decode_block(sm_fpkg_decoder_t *decoder,
                                       size_t stored_size,
                                       uint32_t even_length, uint8_t mode,
                                       uint8_t *output, size_t output_size) {
-  if (!decoder || !stored || !output || output_size == 0 ||
+  if (!decoder || !output || output_size == 0 ||
       output_size > K_BLOCK || stored_size > 2u * K_BLOCK ||
-      even_length == 0 || even_length > stored_size ||
-      (mode & 0xe0u) != 0)
+      even_length > stored_size)
+    return SM_FPKG_CORRUPT;
+  if (stored_size == 0) {
+    if (even_length != 0 || mode != 0)
+      return SM_FPKG_CORRUPT;
+    memset(output, 0, output_size);
+    return SM_FPKG_OK;
+  }
+  if (!stored)
     return SM_FPKG_CORRUPT;
   size_t even_logical = output_size < K_HALF ? output_size : K_HALF;
-  if (even_length > stored_size) return SM_FPKG_CORRUPT;
   size_t odd_stored = stored_size - even_length;
   sm_fpkg_status_t status = decode_half(
       decoder, stored, even_length, output, 0, even_logical,

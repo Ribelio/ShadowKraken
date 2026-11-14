@@ -78,6 +78,18 @@ xxd -i -n sm_ampr_ng_runtime vendor/ampr-emu-ng-v0.4.0/libSceAmpr.sprx \
 This checks runtime selection and provisioning only; it cannot establish PS5
 loader or codec-2 behavior.
 
+The decoder differential check runs the deterministic malformed corpus and
+boundary vectors through native C and pinned Kraken. It compares acceptance
+and every byte of each accepted output:
+
+```sh
+python3 tools/test_fpkg_decoder_differential.py \
+  /path/to/kraken-mount-reference
+```
+
+The reference checkout must be at Kraken Mount revision
+`4b420d579bd381796d773875e36d14c9acaabf39`.
+
 The cache builder also has an end-to-end synthetic plaintext FPKG fixture. It
 checks the FIH/PFS reader, loose-file extraction, AMPR index/manifest creation,
 cancelled staging recovery, atomic generation publication and reuse:
