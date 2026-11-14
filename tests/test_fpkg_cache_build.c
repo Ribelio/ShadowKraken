@@ -39,9 +39,25 @@ typedef struct {
   unsigned cancel_at;
 } cancel_context_t;
 
+typedef struct {
+  unsigned calls;
+  const char *path;
+} mutate_context_t;
+
 static bool cancel_on_call(void *opaque) {
   cancel_context_t *cancel = opaque;
   return ++cancel->calls >= cancel->cancel_at;
+}
+
+static bool mutate_backport_on_call(void *opaque) {
+  mutate_context_t *mutation = opaque;
+  if (++mutation->calls == 2u) {
+    int fd = open(mutation->path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+    assert(fd >= 0);
+    assert(write(fd, "changed during build", 20) == 20);
+    assert(close(fd) == 0);
+  }
+  return false;
 }
 
 static void write_all(int fd, const void *data, size_t size) {
@@ -383,6 +399,83 @@ int main(void) {
   assert(snprintf(path, sizeof(path), "%s/eboot.bin", upgraded_generation) > 0);
   assert(stat(path, &extracted_stat) == 0 &&
          (extracted_stat.st_mode & 0777) == 0755);
+  char backport_path[MAX_PATH], backport_file[MAX_PATH], extra_file[MAX_PATH];
+  assert(snprintf(backport_path, sizeof(backport_path), "%s/backport", root) > 0);
+  assert(mkdir(backport_path, 0700) == 0);
+  assert(snprintf(backport_file, sizeof(backport_file), "%s/DATA.BIN", backport_path) > 0);
+  assert(snprintf(extra_file, sizeof(extra_file), "%s/extra.bin", backport_path) > 0);
+  int backport_fd = open(backport_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  assert(backport_fd >= 0);
+  write_all(backport_fd, "patched", 7);
+  assert(close(backport_fd) == 0);
+  backport_fd = open(extra_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  assert(backport_fd >= 0);
+  write_all(backport_fd, "new", 3);
+  assert(close(backport_fd) == 0);
+  options.backport_path = backport_path;
+  mutate_context_t mutation = {.path = backport_file};
+  sm_fpkg_cache_options_t racing = options;
+  racing.is_cancelled = mutate_backport_on_call;
+  racing.cancel_ctx = &mutation;
+  char interrupted_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
+             &racing, interrupted_generation) != SM_FPKG_OK);
+  assert(!interrupted_generation[0]);
+  assert(sm_fpkg_cache_find_current_generation(
+             cache_root, &info, current_generation) == SM_FPKG_OK);
+  assert(!strcmp(current_generation, upgraded_generation));
+  backport_fd = open(backport_file, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+  assert(backport_fd >= 0);
+  write_all(backport_fd, "patched", 7);
+  assert(close(backport_fd) == 0);
+  char backport_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
+             &options, backport_generation) == SM_FPKG_OK);
+  assert(strcmp(backport_generation, upgraded_generation));
+  assert(sm_fpkg_cache_find_current_generation_with_backport(
+             cache_root, &info, backport_path, current_generation) == SM_FPKG_OK);
+  assert(!strcmp(current_generation, backport_generation));
+  assert(sm_fpkg_cache_read_generation_info(
+             cache_root, info.title_id, backport_generation,
+             &generation_info) == SM_FPKG_OK);
+  assert(sm_fpkg_cache_backport_matches(&generation_info, backport_path));
+  assert(snprintf(path, sizeof(path), "%s/data.bin", backport_generation) > 0);
+  extracted_fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(extracted_fd >= 0);
+  char patched[7];
+  assert(read(extracted_fd, patched, sizeof(patched)) == (ssize_t)sizeof(patched));
+  assert(!memcmp(patched, "patched", sizeof(patched)) && close(extracted_fd) == 0);
+  assert(snprintf(path, sizeof(path), "%s/ampr_assets.index", backport_generation) > 0);
+  extracted_fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(extracted_fd >= 0);
+  assert(read(extracted_fd, manifest_header, sizeof(manifest_header)) ==
+         (ssize_t)sizeof(manifest_header));
+  assert(close(extracted_fd) == 0 && get_le64(manifest_header + 40) == 4u &&
+         get_le64(manifest_header + 48) == 0u);
+  backport_fd = open(backport_file, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+  assert(backport_fd >= 0);
+  write_all(backport_fd, "changed-backport", 16);
+  assert(close(backport_fd) == 0);
+  assert(!sm_fpkg_cache_backport_matches(&generation_info, backport_path));
+  assert(sm_fpkg_cache_find_current_generation_with_backport(
+             cache_root, &info, backport_path, current_generation) ==
+         SM_FPKG_UNSUPPORTED);
+  assert(sm_fpkg_cache_find_current_generation(
+             cache_root, &info, current_generation) == SM_FPKG_UNSUPPORTED);
+  char changed_generation[MAX_PATH];
+  assert(sm_fpkg_cache_build_generation(
+             cache_root, source_path, source_fd, &info, fpkg, NULL, NULL,
+             &options, changed_generation) == SM_FPKG_OK);
+  assert(strcmp(changed_generation, backport_generation));
+  assert(snprintf(path, sizeof(path), "%s/data.bin", changed_generation) > 0);
+  extracted_fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(extracted_fd >= 0);
+  char changed[16];
+  assert(read(extracted_fd, changed, sizeof(changed)) == (ssize_t)sizeof(changed));
+  assert(!memcmp(changed, "changed-backport", sizeof(changed)) &&
+         close(extracted_fd) == 0);
   sm_fpkg_close(fpkg);
   assert(close(source_fd) == 0);
   remove_tree(root);

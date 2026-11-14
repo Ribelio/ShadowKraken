@@ -63,6 +63,26 @@ connected GitHub account has read-only permission on upstream.
 
 The native C reader, decoder, index writer, transactional cache, scanner path,
 registration path and launch-owned sandbox layer are implemented in this branch.
+
+Backport files outside `fakelib` and `fakelib2` are snapshotted, staged as
+loose files and merged into both AMPR indexes by case-folded path. The snapshot
+is rechecked before publication and at launch; a changed or removed backport
+requires a new generation. Backport symlinks and special filesystem entries
+are rejected because staging uses no-follow opens.
+When an override differs from the package path only in letter case, SMP stages
+and indexes it using the package spelling so the resulting title remains
+accessible on case-sensitive filesystems. KrakenMount retains the backport's
+spelling in its generated index.
+
+KrakenMount mounts the registered title stack writable directly in `/app0`.
+SMP instead mounts a per-title writable union layer above the registered stack
+to keep published cache generations immutable. On generation changes SMP
+copies game-created entries into a fresh layer, excludes files owned by either
+generation, and retains prior layers as backups. This differs from Kraken's
+in-place rebuild and may use more storage. Unsupported special entries,
+including filesystem whiteouts, stop migration without deleting the previous
+layer. Sandbox mount flags, copy-up and loader behavior still require PS5
+verification.
 The scanner creates candidates only when `fpkg_direct_mount` is enabled and the
 existing PKG parser classifies a confident base package; the native reader then
 rejects unsupported/non-plaintext layouts. The install worker publishes a

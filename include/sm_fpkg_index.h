@@ -46,6 +46,14 @@ sm_fpkg_status_t sm_fpkg_index_build_package(
     void *extract_ctx,
     int64_t package_mtime,
     sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out);
+/* Overlay loose files by case-folded path. Matching package files are replaced;
+ * new paths are added. Every override must have chunks == NULL. */
+sm_fpkg_status_t sm_fpkg_index_build_package_with_overrides(
+    const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract_fn,
+    void *extract_ctx, sm_fpkg_index_extract_fn should_skip_fn,
+    void *skip_ctx, const sm_fpkg_index_file_t *overrides,
+    size_t override_count, int64_t package_mtime,
+    sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out);
 void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob);
 
 /* Validate the bounded AMPRIDX3 or AMPRPAK4 layout in an already-open file.

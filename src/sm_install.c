@@ -21,6 +21,7 @@
 #include "sm_fpkg_cache.h"
 #include "sm_pkg.h"
 #include "sm_fakelib.h"
+#include "sm_scan.h"
 
 #include <dlfcn.h>
 
@@ -328,10 +329,14 @@ static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
                     MAX_PATH);
 
     fpkg_cache_cancel_context_t cancel = {.title_id = candidate->title_id};
+    char backport_path[MAX_PATH] = {0};
+    (void)resolve_backport_path_for_title(candidate->title_id, NULL,
+                                          backport_path);
     sm_fpkg_cache_options_t options = {
         .max_extract_bytes = SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT,
         .is_cancelled = fpkg_cache_build_cancelled,
         .cancel_ctx = &cancel,
+        .backport_path = backport_path[0] ? backport_path : NULL,
     };
     char generation_path[MAX_PATH];
     fpkg_status = sm_fpkg_cache_build_generation(

@@ -265,6 +265,26 @@ int main(void) {
   int active_fd = make_generation(title_fd, active_name, 2u);
   assert(close(active_fd) == 0);
   write_active(title_fd, active_name);
+  char writable_path[MAX_PATH], writable_generation[MAX_PATH];
+  assert(snprintf(writable_generation, sizeof(writable_generation), "%s/%s/%s",
+                  cache_root, TEST_TITLE_ID, active_name) > 0);
+  assert(symlinkat("/tmp", title_fd, "writable") == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, writable_path) != SM_FPKG_OK);
+  assert(!writable_path[0]);
+  assert(unlinkat(title_fd, "writable", 0) == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, writable_path) == SM_FPKG_OK);
+  int writable_fd = open(writable_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  assert(writable_fd >= 0);
+  write_at(writable_fd, "game-created.dat", "persistent", 0600);
+  assert(close(writable_fd) == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, writable_path) == SM_FPKG_OK);
+  char persistent_path[MAX_PATH];
+  assert(snprintf(persistent_path, sizeof(persistent_path), "%s/game-created.dat",
+                  writable_path) > 0);
+  assert(access(persistent_path, F_OK) == 0);
 
   sm_pkg_info_t active_source = {0};
   (void)strlcpy(active_source.path, TEST_SOURCE_PATH,
@@ -416,6 +436,34 @@ int main(void) {
   assert(bad_generation_fd >= 0);
   assert(unlinkat(bad_generation_fd, "unexpected.save", 0) == 0);
   assert(close(bad_generation_fd) == 0);
+
+  writable_fd = open(writable_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  assert(writable_fd >= 0);
+  write_at(writable_fd, "eboot.bin", "old-game-write", 0600);
+  assert(symlinkat("game-created.dat", writable_fd, "game-link") == 0);
+  assert(mkfifoat(writable_fd, "unsupported-fifo", 0600) == 0);
+  assert(close(writable_fd) == 0);
+  char next_generation[MAX_PATH], next_upper[MAX_PATH];
+  assert(snprintf(next_generation, sizeof(next_generation), "%s/%s/%s",
+                  cache_root, TEST_TITLE_ID, orphan_name) > 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        next_generation, next_upper) != SM_FPKG_OK);
+  assert(!next_upper[0] && access(persistent_path, F_OK) == 0);
+  writable_fd = open(writable_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  assert(writable_fd >= 0 && unlinkat(writable_fd, "unsupported-fifo", 0) == 0);
+  assert(close(writable_fd) == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        next_generation, next_upper) == SM_FPKG_OK);
+  assert(strcmp(next_upper, writable_path));
+  char migrated[MAX_PATH];
+  assert(snprintf(migrated, sizeof(migrated), "%s/game-created.dat", next_upper) > 0);
+  assert(access(migrated, F_OK) == 0);
+  assert(snprintf(migrated, sizeof(migrated), "%s/eboot.bin", next_upper) > 0);
+  assert(access(migrated, F_OK) != 0 && errno == ENOENT);
+  assert(snprintf(migrated, sizeof(migrated), "%s/game-link", next_upper) > 0);
+  assert(lstat(migrated, &st) == 0 && S_ISLNK(st.st_mode));
+  assert(snprintf(migrated, sizeof(migrated), "%s/eboot.bin", writable_path) > 0);
+  assert(access(migrated, F_OK) == 0);
   cleanup_allowed = false;
   assert(sm_fpkg_cache_remove_generation(
              cache_root, TEST_TITLE_ID, orphan_name, begin_cleanup, end_cleanup,
@@ -431,6 +479,25 @@ int main(void) {
   assert(fstatat(title_fd, orphan_name, &st, AT_SYMLINK_NOFOLLOW) != 0 &&
          errno == ENOENT);
   assert(cleanup_begin_count == 4 && cleanup_end_count == 3);
+  assert(access(persistent_path, F_OK) == 0);
+  writable_fd = open(next_upper, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  assert(writable_fd >= 0);
+  write_at(writable_fd, "second-save.dat", "new", 0600);
+  assert(close(writable_fd) == 0);
+  assert(renameat(title_fd, ".writable-active", title_fd, ".saved-writable-active") == 0);
+  assert(symlinkat("/tmp", title_fd, ".writable-active") == 0);
+  char third_upper[MAX_PATH];
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, third_upper) != SM_FPKG_OK);
+  assert(!third_upper[0] && access(persistent_path, F_OK) == 0);
+  assert(unlinkat(title_fd, ".writable-active", 0) == 0);
+  assert(renameat(title_fd, ".saved-writable-active", title_fd, ".writable-active") == 0);
+  assert(sm_fpkg_cache_prepare_writable(cache_root, TEST_TITLE_ID,
+                                        writable_generation, third_upper) == SM_FPKG_OK);
+  assert(snprintf(migrated, sizeof(migrated), "%s/second-save.dat", third_upper) > 0);
+  assert(access(migrated, F_OK) == 0);
+  assert(snprintf(migrated, sizeof(migrated), "%s/game-created.dat", third_upper) > 0);
+  assert(access(migrated, F_OK) == 0);
 
   char missing_root[MAX_PATH];
   int missing_root_length = snprintf(missing_root, sizeof(missing_root),

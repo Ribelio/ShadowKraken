@@ -1,5 +1,6 @@
 #include "host_platform.h"
 #include "sm_limits.h"
+#include "sm_fpkg_cache.h"
 #ifdef __APPLE__
 #include "sandbox_layer.inc"
 #define MNT_BYFSID 0x08000000
@@ -9,16 +10,23 @@
 struct statfs {
   char f_mntonname[88], f_mntfromname[88], f_fstypename[16];
   fsid_t f_fsid;
+  unsigned long f_flags;
 };
+#endif
+#ifndef MNT_RDONLY
+#define MNT_RDONLY 1
 #endif
 #define SANDBOX_USB_ROOT_COUNT 8u
 #define SANDBOX_EXT_ROOT_COUNT 2u
 static struct statfs mounts[2];
 static int mount_count, lookup_error, snapshot_error, unmount_error;
 static unsigned unmount_calls, removed_dirs;
+static unsigned mount_calls;
+static unsigned fail_mount_call;
 static struct {
   fakelib_layer_t layers[8u + SANDBOX_USB_ROOT_COUNT + SANDBOX_EXT_ROOT_COUNT];
   size_t layer_count;
+  char fpkg_generation_path[MAX_PATH];
   uint64_t cleanup_deadline_us;
 } g_fakelib_mount;
 
@@ -37,7 +45,31 @@ static int sm_mount_table_snapshot(struct statfs **out) {
   return mount_count;
 }
 int statfs(const char *path, struct statfs *out) {
-  (void)path; (void)out; errno = lookup_error; return -1;
+  (void)path;
+  if (lookup_error) { errno = lookup_error; return -1; }
+  *out = mounts[0];
+  return 0;
+}
+static sm_fpkg_status_t sm_test_prepare_writable(
+    const char *root, const char *title, const char *generation,
+    char out[MAX_PATH]) {
+  (void)root; (void)title; (void)generation;
+  strlcpy(out, "/data/cache/writable", MAX_PATH);
+  return SM_FPKG_OK;
+}
+#define sm_fpkg_cache_prepare_writable sm_test_prepare_writable
+static bool mount_sandbox_layer(const char *title, const char *source,
+                                const char *target, const char *label,
+                                bool overlay, int flags) {
+  (void)title; (void)label;
+  assert(flags == 0);
+  if (++mount_calls == fail_mount_call) { errno = EIO; return false; }
+  strlcpy(mounts[0].f_mntonname, target, sizeof(mounts[0].f_mntonname));
+  strlcpy(mounts[0].f_mntfromname, source, sizeof(mounts[0].f_mntfromname));
+  strlcpy(mounts[0].f_fstypename, overlay ? "unionfs" : "nullfs",
+          sizeof(mounts[0].f_fstypename));
+  mounts[0].f_flags = 0;
+  return true;
 }
 int unmount(const char *path, int flags) {
   assert(flags == MNT_BYFSID && !strcmp(path, "FSID:11:22"));
@@ -73,6 +105,28 @@ static fakelib_layer_t reset_layer(const char *source, bool overlay) {
 }
 
 int main(void) {
+  const char *app0 = "/mnt/sandbox/PPSA12345_000/app0";
+  memset(&g_fakelib_mount, 0, sizeof(g_fakelib_mount));
+  memset(mounts, 0, sizeof(mounts));
+  strlcpy(mounts[0].f_mntonname, app0, sizeof(mounts[0].f_mntonname));
+  mounts[0].f_flags = MNT_RDONLY;
+  lookup_error = 0;
+  mount_calls = fail_mount_call = 0;
+  assert(mount_fpkg_writable_app0("PPSA12345", app0));
+  assert(mount_calls == 2 && g_fakelib_mount.layer_count == 2 &&
+         !g_fakelib_mount.layers[0].overlay &&
+         g_fakelib_mount.layers[1].overlay &&
+         g_fakelib_mount.layers[0].owned_mount &&
+         g_fakelib_mount.layers[1].owned_mount);
+  memset(&g_fakelib_mount, 0, sizeof(g_fakelib_mount));
+  mounts[0].f_flags = MNT_RDONLY;
+  mount_calls = 0;
+  fail_mount_call = 2;
+  assert(!mount_fpkg_writable_app0("PPSA12345", app0));
+  assert(g_fakelib_mount.layer_count == 1 &&
+         g_fakelib_mount.layers[0].owned_mount);
+  memset(&g_fakelib_mount, 0, sizeof(g_fakelib_mount));
+  fail_mount_call = 0;
   const char *sources[] = {"/data", "/mnt/usb0", "/preinst/common/font", "/data/game/fakelib"};
   for (size_t i = 0; i < 4; ++i) {
     for (unsigned error = 0; error < 2; ++error) {

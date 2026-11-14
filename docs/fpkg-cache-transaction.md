@@ -73,6 +73,10 @@ or has ambiguous ownership cannot be scanned for rebuild, mutated, or purged.
 - Safe cleanup removes only known inactive generated generations after validating
   their identity and symlink-free path. Destructive purge is a separate explicit
   action, scope-limited and blocked while title/mount ownership is active.
+- Game-created `/app0` files live in a separate writable layer. A generation
+  switch copies non-owned paths into a fresh layer and publishes its pointer
+  only after the copy is synchronized. Prior layers and conflicting files are
+  retained. Unsupported special entries stop migration without deleting data.
 - Failure at extract, index write, flush, rename, journal update, registration or
   power-loss recovery must leave the last known-good generation reachable.
 

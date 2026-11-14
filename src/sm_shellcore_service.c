@@ -474,8 +474,7 @@ static bool prepare_title_runtime(const char *title_id,
       errno = ESTALE;
       return false;
     }
-    if (!generation_info.source_matches_snapshot &&
-        !restore_cached_fpkg_source(title_id, source_path)) {
+    if (!restore_cached_fpkg_source(title_id, source_path)) {
       errno = ESTALE;
       return false;
     }

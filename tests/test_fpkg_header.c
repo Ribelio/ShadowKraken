@@ -322,6 +322,37 @@ int main(void) {
   assert(get_le32(generated_manifest.data + 128u + 40u) == 0);
   sm_fpkg_index_blob_free(&generated_index);
   sm_fpkg_index_blob_free(&generated_manifest);
+  sm_fpkg_index_file_t overrides[] = {
+      {.path = "EBOOT.BIN", .size = 7},
+      {.path = "patch/new.dat", .size = 4},
+  };
+  sm_fpkg_index_blob_t expected_index = {0}, expected_manifest = {0};
+  assert(sm_fpkg_index_build_package_with_overrides(
+             fpkg, NULL, NULL, NULL, NULL, overrides, 2, 123,
+             &generated_index, &generated_manifest) == SM_FPKG_OK);
+  assert(sm_fpkg_index_build(overrides, 2, sizeof(pkg.bytes), 123,
+                             &expected_index, &expected_manifest) == SM_FPKG_OK);
+  assert(generated_index.size == expected_index.size &&
+         memcmp(generated_index.data, expected_index.data,
+                expected_index.size) == 0);
+  assert(generated_manifest.size == expected_manifest.size &&
+         memcmp(generated_manifest.data, expected_manifest.data,
+                expected_manifest.size) == 0);
+  sm_fpkg_index_blob_free(&generated_index);
+  sm_fpkg_index_blob_free(&generated_manifest);
+  sm_fpkg_index_blob_free(&expected_index);
+  sm_fpkg_index_blob_free(&expected_manifest);
+  assert(sm_fpkg_index_build_package_with_overrides(
+             fpkg, NULL, NULL, extract_eboot, NULL, &overrides[1], 1, 123,
+             &generated_index, &generated_manifest) == SM_FPKG_OK);
+  assert(get_le64(generated_manifest.data + 40) == 1u &&
+         get_le64(generated_manifest.data + 48) == 0u);
+  sm_fpkg_index_blob_free(&generated_index);
+  sm_fpkg_index_blob_free(&generated_manifest);
+  overrides[1].path = "eboot.bin";
+  assert(sm_fpkg_index_build_package_with_overrides(
+             fpkg, NULL, NULL, NULL, NULL, overrides, 2, 123,
+             &generated_index, &generated_manifest) == SM_FPKG_CORRUPT);
   uint8_t payload[13];
   assert(sm_fpkg_read_file(fpkg, 0, 0, payload, sizeof(payload)) ==
          SM_FPKG_OK);

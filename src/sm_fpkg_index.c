@@ -883,9 +883,32 @@ done:
   return status;
 }
 
-sm_fpkg_status_t sm_fpkg_index_build_package(
+typedef struct {
+  const sm_fpkg_index_file_t *file;
+  bool used;
+} package_override_t;
+
+static int compare_folded_paths(const char *a, const char *b) {
+  while (*a && *b) {
+    uint8_t ac = fold_byte((uint8_t)*a++);
+    uint8_t bc = fold_byte((uint8_t)*b++);
+    if (ac != bc)
+      return ac < bc ? -1 : 1;
+  }
+  return ((unsigned char)*a > (unsigned char)*b) -
+         ((unsigned char)*a < (unsigned char)*b);
+}
+
+static int compare_package_overrides(const void *a, const void *b) {
+  const package_override_t *left = a, *right = b;
+  return compare_folded_paths(left->file->path, right->file->path);
+}
+
+sm_fpkg_status_t sm_fpkg_index_build_package_with_overrides(
     const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract_fn,
-    void *extract_ctx, int64_t package_mtime,
+    void *extract_ctx, sm_fpkg_index_extract_fn should_skip_fn,
+    void *skip_ctx, const sm_fpkg_index_file_t *overrides,
+    size_t override_count, int64_t package_mtime,
     sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out) {
   if (!index_out || !manifest_out || index_out == manifest_out)
     return SM_FPKG_CORRUPT;
@@ -893,26 +916,49 @@ sm_fpkg_status_t sm_fpkg_index_build_package(
   index_out->size = 0;
   manifest_out->data = NULL;
   manifest_out->size = 0;
-  if (!fpkg)
+  if (!fpkg || (override_count && !overrides))
     return SM_FPKG_CORRUPT;
   size_t entry_count = sm_fpkg_file_count(fpkg);
   if (entry_count == 0 || entry_count > MAX_INDEX_FILES ||
+      override_count > MAX_INDEX_FILES - entry_count ||
       sm_fpkg_package_size(fpkg) == 0)
     return SM_FPKG_UNSUPPORTED;
 
-  sm_fpkg_index_file_t *files = calloc(entry_count, sizeof(*files));
+  size_t capacity = entry_count + override_count;
+  sm_fpkg_index_file_t *files = calloc(capacity, sizeof(*files));
   sm_fpkg_index_chunk_t **owned_chunks =
-      calloc(entry_count, sizeof(*owned_chunks));
+      calloc(capacity, sizeof(*owned_chunks));
+  package_override_t *sorted = override_count
+      ? calloc(override_count, sizeof(*sorted)) : NULL;
   sm_fpkg_block_t *blocks = NULL;
-  if (!files || !owned_chunks) {
+  if (!files || !owned_chunks || (override_count && !sorted)) {
     free(files);
     free(owned_chunks);
+    free(sorted);
     return SM_FPKG_NOMEM;
   }
   static const sm_fpkg_index_chunk_t empty_chunks[1] = {{0}};
   size_t file_count = 0, total_chunks = 0;
   sm_fpkg_status_t status = SM_FPKG_OK;
-  for (size_t i = 0; i < entry_count; ++i) {
+  for (size_t i = 0; i < override_count; ++i) {
+    if (!overrides[i].path || overrides[i].chunks || overrides[i].chunk_count ||
+        !valid_relative_path(overrides[i].path, strlen(overrides[i].path))) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+    sorted[i].file = &overrides[i];
+  }
+  if (status == SM_FPKG_OK && override_count > 1) {
+    qsort(sorted, override_count, sizeof(*sorted), compare_package_overrides);
+    for (size_t i = 1; i < override_count; ++i) {
+      if (compare_folded_paths(sorted[i - 1].file->path,
+                               sorted[i].file->path) == 0) {
+        status = SM_FPKG_CORRUPT;
+        break;
+      }
+    }
+  }
+  for (size_t i = 0; status == SM_FPKG_OK && i < entry_count; ++i) {
     sm_fpkg_file_t entry;
     if (!sm_fpkg_file_at(fpkg, i, &entry)) {
       status = SM_FPKG_CORRUPT;
@@ -920,7 +966,24 @@ sm_fpkg_status_t sm_fpkg_index_build_package(
     }
     if (entry.is_directory)
       continue;
+    if (should_skip_fn && should_skip_fn(entry.path, skip_ctx))
+      continue;
     sm_fpkg_index_file_t *file = &files[file_count];
+    size_t left = 0, right = override_count;
+    while (left < right) {
+      size_t mid = left + (right - left) / 2u;
+      int order = compare_folded_paths(sorted[mid].file->path, entry.path);
+      if (order < 0)
+        left = mid + 1u;
+      else
+        right = mid;
+    }
+    if (left < override_count &&
+        compare_folded_paths(sorted[left].file->path, entry.path) == 0) {
+      *file = *sorted[left].file;
+      sorted[left].used = true;
+      goto next_file;
+    }
     file->path = entry.path;
     file->size = entry.size;
     if (should_extract_fn && should_extract_fn(entry.path, extract_ctx))
@@ -977,20 +1040,35 @@ sm_fpkg_status_t sm_fpkg_index_build_package(
 next_file:
     ++file_count;
   }
+  if (status == SM_FPKG_OK) {
+    for (size_t i = 0; i < override_count; ++i)
+      if (!sorted[i].used)
+        files[file_count++] = *sorted[i].file;
+  }
   if (status == SM_FPKG_OK)
     status = sm_fpkg_index_build(files, file_count,
                                  sm_fpkg_package_size(fpkg), package_mtime,
                                  index_out, manifest_out);
   free(blocks);
-  for (size_t i = 0; i < entry_count; ++i)
+  for (size_t i = 0; i < capacity; ++i)
     free(owned_chunks[i]);
   free(owned_chunks);
+  free(sorted);
   free(files);
   if (status != SM_FPKG_OK) {
     sm_fpkg_index_blob_free(index_out);
     sm_fpkg_index_blob_free(manifest_out);
   }
   return status;
+}
+
+sm_fpkg_status_t sm_fpkg_index_build_package(
+    const sm_fpkg_t *fpkg, sm_fpkg_index_extract_fn should_extract_fn,
+    void *extract_ctx, int64_t package_mtime,
+    sm_fpkg_index_blob_t *index_out, sm_fpkg_index_blob_t *manifest_out) {
+  return sm_fpkg_index_build_package_with_overrides(
+      fpkg, should_extract_fn, extract_ctx, NULL, NULL, NULL, 0, package_mtime,
+      index_out, manifest_out);
 }
 
 void sm_fpkg_index_blob_free(sm_fpkg_index_blob_t *blob) {

@@ -64,8 +64,8 @@ typedef struct {
   char fpkg_generation_path[MAX_PATH];
   char fpkg_source_directory[MAX_PATH];
   bool fpkg_source_is_removable;
-  // fakelib, /data, /mnt/disc, fonts, FPKG source, and created parents.
-  fakelib_layer_t layers[8u + SANDBOX_USB_ROOT_COUNT + SANDBOX_EXT_ROOT_COUNT];
+  // fakelib, /data, /mnt/disc, fonts, FPKG app0/source, and created parents.
+  fakelib_layer_t layers[10u + SANDBOX_USB_ROOT_COUNT + SANDBOX_EXT_ROOT_COUNT];
   size_t layer_count;
   sm_l10n_key_t notification;
   char notification_target[MAX_PATH];
@@ -204,7 +204,7 @@ static int sandbox_mount_identity_present(const fakelib_layer_t *layer) {
                  sizeof(layer->mount_fsid)) == 0
         : strcmp(mounts[i].f_mntonname, layer->mount_path) == 0 &&
           strcmp(mounts[i].f_fstypename,
-                 strcmp(layer->label, "directory") == 0 ? "nullfs" : "unionfs") == 0;
+                 layer->overlay ? "unionfs" : "nullfs") == 0;
     if (matches) {
       found = true;
       break;
@@ -388,6 +388,62 @@ static bool track_sandbox_layer(const char *title_id,
   return true;
 }
 
+/* Cover the sandbox's existing app0 mount intentionally, recording each
+ * successful layer before identity lookup so rollback cannot lose ownership. */
+static bool mount_fpkg_app0_layer(const char *title_id, const char *source,
+                                  const char *target, bool overlay) {
+  if (g_fakelib_mount.layer_count >=
+      sizeof(g_fakelib_mount.layers) / sizeof(g_fakelib_mount.layers[0])) {
+    errno = ENOSPC;
+    return false;
+  }
+  const char *label = overlay ? "fpkg-app0-upper" : "fpkg-app0-base";
+  if (!mount_sandbox_layer(title_id, source, target, label, overlay, 0))
+    return false;
+  fakelib_layer_t *layer = &g_fakelib_mount.layers[g_fakelib_mount.layer_count++];
+  memset(layer, 0, sizeof(*layer));
+  layer->owned_mount = true;
+  layer->overlay = overlay;
+  layer->label = label;
+  (void)strlcpy(layer->source_path, source, sizeof(layer->source_path));
+  (void)strlcpy(layer->mount_path, target, sizeof(layer->mount_path));
+  struct statfs fs;
+  if (statfs(target, &fs) != 0 || strcmp(fs.f_mntonname, target) != 0 ||
+      strcmp(fs.f_fstypename, overlay ? "unionfs" : "nullfs") != 0 ||
+      (fs.f_flags & MNT_RDONLY)) {
+    errno = EBUSY;
+    return false;
+  }
+  layer->mount_fsid = fs.f_fsid;
+  layer->mount_identity_valid = true;
+  return true;
+}
+
+static bool mount_fpkg_writable_app0(const char *title_id,
+                                     const char *app0_path) {
+  char writable[MAX_PATH];
+  if (sm_fpkg_cache_prepare_writable(SM_FPKG_CACHE_DEFAULT_ROOT, title_id,
+                                     g_fakelib_mount.fpkg_generation_path,
+                                     writable) != SM_FPKG_OK)
+    return false;
+  struct statfs fs;
+  if (statfs(app0_path, &fs) != 0 || strcmp(fs.f_mntonname, app0_path) != 0) {
+    errno = ENOENT;
+    return false;
+  }
+  if (fs.f_flags & MNT_RDONLY) {
+    char source[MAX_PATH];
+    int length = snprintf(source, sizeof(source), "/system_ex/app/%s", title_id);
+    if (length < 0 || (size_t)length >= sizeof(source)) {
+      errno = ENAMETOOLONG;
+      return false;
+    }
+    if (!mount_fpkg_app0_layer(title_id, source, app0_path, false))
+      return false;
+  }
+  return mount_fpkg_app0_layer(title_id, writable, app0_path, true);
+}
+
 static bool mount_sandbox_directory_at(const char *title_id,
                                        const char *app0_path,
                                        const char *target_suffix,
@@ -527,6 +583,13 @@ bool sm_fakelib_resolve_fpkg_generation_source(
       errno = ESTALE;
       return false;
     }
+  }
+  char backport_path[MAX_PATH] = {0};
+  (void)resolve_backport_path_for_title(title_id, NULL, backport_path);
+  if (!sm_fpkg_cache_backport_matches(
+          &info, backport_path[0] ? backport_path : NULL)) {
+    errno = ESTALE;
+    return false;
   }
   (void)strlcpy(source_path_out, info.source_path, MAX_PATH);
   return true;
@@ -2638,7 +2701,8 @@ static bool mount_fakelib_for_game_locked(pid_t pid, const char *title_id,
                           ? "fakelib2"
                           : (fpkg_source ? "fpkg-fakelib"
                                          : (has_game ? "game" : "global"));
-  if ((has_source && !track_sandbox_layer(title_id, source_path, mount_path,
+  if ((fpkg_source && !mount_fpkg_writable_app0(title_id, sandbox_app0_path)) ||
+      (has_source && !track_sandbox_layer(title_id, source_path, mount_path,
                                         label, true, 0)) ||
       !ensure_sandbox_parent(sandbox_app0_path, "/mnt") ||
       !mount_sandbox_directory(title_id, sandbox_app0_path, "/data", 0) ||

@@ -52,13 +52,28 @@ ownership-aware cleanup and quarantine:
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
   -include tests/host_platform.h \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
-  tests/test_fpkg_cache.c src/sm_fpkg_cache.c src/sm_fpkg_index.c \
+  tests/test_fpkg_cache.c src/sm_fpkg_backport.c src/sm_fpkg_cache.c src/sm_fpkg_index.c \
   -o /tmp/sm-fpkg-cache-test
 /tmp/sm-fpkg-cache-test
 ```
 
 It uses synthetic cache records and generated AMPR indexes, verifies damaged
 index rejection without a size change, and does not open an FPKG fixture.
+
+Backport snapshot checks cover source replacement, regular-file enumeration,
+fakelib exclusion and symlink rejection. The cache build fixture additionally
+checks loose-file overrides, added paths, case differences, source mutation
+during staging, and cache invalidation when the backport changes or disappears.
+The cache transaction fixture checks writable-layer migration, retained
+conflicting files, recovery after migration failure and pointer symlink rejection.
+
+```sh
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
+  -include tests/host_platform.h -fsanitize=address,undefined \
+  -fno-omit-frame-pointer tests/test_fpkg_backport.c \
+  src/sm_fpkg_backport.c -o /tmp/sm-fpkg-backport-test
+/tmp/sm-fpkg-backport-test
+```
 
 The AMPR runtime selector verifies the distinct NG runtime path, scans across
 read boundaries, preserves a selected custom runtime, installs the pinned
@@ -104,7 +119,7 @@ cancelled staging recovery, atomic generation publication and reuse:
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
   -include tests/host_platform.h \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
-  tests/test_fpkg_cache_build.c src/sm_fpkg_cache.c src/sm_fpkg.c \
+  tests/test_fpkg_cache_build.c src/sm_fpkg_backport.c src/sm_fpkg_cache.c src/sm_fpkg.c \
   src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c \
   src/sm_fpkg_tree.c src/sm_fpkg_index.c \
   -o /tmp/sm-fpkg-cache-build-test

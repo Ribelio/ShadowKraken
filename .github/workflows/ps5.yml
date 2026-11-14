@@ -127,6 +127,11 @@ jobs:
 
       - name: Run FPKG cache and lifecycle host checks
         run: |
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
+            -include tests/host_platform.h -fsanitize=address,undefined \
+            -fno-omit-frame-pointer tests/test_fpkg_backport.c \
+            src/sm_fpkg_backport.c -o /tmp/sm-fpkg-backport-test
+          /tmp/sm-fpkg-backport-test
           (cd vendor/ampr-emu-ng-v0.4.0 && \
             sha256sum --check --ignore-missing --strict SHA256SUMS)
           xxd -i -n sm_ampr_ng_runtime \
@@ -141,14 +146,14 @@ jobs:
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
             -include tests/host_platform.h \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/test_fpkg_cache.c src/sm_fpkg_cache.c src/sm_fpkg_index.c \
+            tests/test_fpkg_cache.c src/sm_fpkg_backport.c src/sm_fpkg_cache.c src/sm_fpkg_index.c \
             -o /tmp/sm-fpkg-cache-test
           /tmp/sm-fpkg-cache-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror \
             -Wno-macro-redefined -Iinclude -Isrc -Itests \
             -include tests/host_platform.h \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/test_fpkg_cache_build.c src/sm_fpkg_cache.c src/sm_fpkg.c \
+            tests/test_fpkg_cache_build.c src/sm_fpkg_backport.c src/sm_fpkg_cache.c src/sm_fpkg.c \
             src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c \
             src/sm_fpkg_tree.c src/sm_fpkg_index.c \
             -o /tmp/sm-fpkg-cache-build-test

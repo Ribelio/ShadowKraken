@@ -21,7 +21,8 @@ def main():
         (build / "sandbox_cleanup.inc").write_text(functions(root, "src/sm_fakelib.c", [
             "sandbox_mount_matches", "sandbox_mount_identity_present",
             "unmount_unreachable_sandbox_layer", "unmount_sandbox_layer",
-            "is_sandbox_removable_path", "remove_fpkg_sandbox_layers_for_root"]), encoding="utf-8")
+            "is_sandbox_removable_path", "remove_fpkg_sandbox_layers_for_root",
+            "mount_fpkg_app0_layer", "mount_fpkg_writable_app0"]), encoding="utf-8")
         binary = build / "cleanup"
         subprocess.run(shlex.split(os.environ.get("CC", "cc")) + [
             "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

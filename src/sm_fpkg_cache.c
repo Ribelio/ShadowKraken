@@ -10,6 +10,7 @@
 #include <stdio.h>
 
 #include "sm_fpkg_cache.h"
+#include "sm_fpkg_backport.h"
 #include "sm_time.h"
 
 #define SM_FPKG_CACHE_MANIFEST_LIMIT (4u * 1024u * 1024u)
@@ -341,16 +342,19 @@ static bool is_ampr_input_index(const char *path) {
 }
 
 static bool is_reserved_cache_path(const char *path) {
-  return !strcmp(path, "ampr_emu.index") ||
-         !strcmp(path, "ampr_assets.index") ||
-         !strcmp(path, "kraken.image") || !strcmp(path, ".built") ||
-         !strcmp(path, ".done") || !strcmp(path, ".journal") ||
-         !strncmp(path, "kraken/", 7u) || !strcmp(path, "kraken");
+  return !strcasecmp(path, "ampr_emu.index") ||
+         !strcasecmp(path, "ampr_assets.index") ||
+         !strcasecmp(path, "ampr_zstd.index") ||
+         !strcasecmp(path, "kraken.image") || !strcasecmp(path, ".built") ||
+         !strcasecmp(path, ".done") || !strcasecmp(path, ".journal") ||
+         !strncasecmp(path, "kraken/", 7u) || !strcasecmp(path, "kraken");
 }
 
 typedef struct {
   sm_fpkg_index_extract_fn extra_selector;
   void *extra_ctx;
+  const sm_fpkg_backport_t *backport;
+  const sm_fpkg_index_file_t *overrides;
 } selector_ctx_t;
 
 static bool select_loose_file(const char *path, void *opaque) {
@@ -365,8 +369,8 @@ static bool select_loose_file(const char *path, void *opaque) {
  * the package-data index because SMP exposes that tree through its own overlay.
  */
 static bool skip_package_index_file(const char *path, void *opaque) {
-  return select_loose_file(path, opaque) || is_ampr_input_index(path) ||
-         is_package_fakelib_path(path);
+  (void)opaque;
+  return is_ampr_input_index(path) || is_package_fakelib_path(path);
 }
 
 static uint64_t source_fingerprint(const sm_pkg_info_t *metadata) {
@@ -419,6 +423,8 @@ static sm_fpkg_status_t estimate_extraction(
       return SM_FPKG_UNSUPPORTED;
     if (!select_loose_file(file.path, selector))
       continue;
+    if (sm_fpkg_backport_find(selector->backport, file.path) != SIZE_MAX)
+      continue;
     if (!safe_relative_path(file.path) || is_reserved_cache_path(file.path) ||
         file.size > limit ||
         *bytes_out > limit - file.size)
@@ -433,6 +439,26 @@ static sm_fpkg_status_t estimate_extraction(
       *metadata_out = true;
     sm_fpkg_status_t status = append_manifest_file(manifest, file.path,
                                                    file.size);
+    if (status != SM_FPKG_OK)
+      return status;
+  }
+  size_t override_count = sm_fpkg_backport_count(selector->backport);
+  const sm_fpkg_index_file_t *overrides = selector->overrides;
+  if (override_count && !overrides)
+    return SM_FPKG_CORRUPT;
+  for (size_t i = 0; i < override_count; ++i) {
+    const sm_fpkg_index_file_t *file = &overrides[i];
+    if (!safe_relative_path(file->path) || is_reserved_cache_path(file->path) ||
+        file->size > limit || *bytes_out > limit - file->size)
+      return SM_FPKG_UNSUPPORTED;
+    *bytes_out += file->size;
+    ++*count_out;
+    if (!strcasecmp(file->path, "eboot.bin") || !strcasecmp(file->path, "eboot2.bin"))
+      *eboot_out = true;
+    if (!strcasecmp(file->path, "sce_sys/param.json") ||
+        !strcasecmp(file->path, "sce_sys/param.sfo"))
+      *metadata_out = true;
+    sm_fpkg_status_t status = append_manifest_file(manifest, file->path, file->size);
     if (status != SM_FPKG_OK)
       return status;
   }
@@ -695,11 +721,46 @@ static bool read_generation_source_metadata(
   }
   if (valid) {
     info_out->source_metadata = metadata;
+    char backport[32];
+    info_out->backport_fingerprint = 0;
+    if (strstr(built, "\nbackport=") != NULL) {
+      if (!text_line_value(built, "backport=", backport, sizeof(backport)) ||
+          strlen(backport) != 16u) {
+        valid = false;
+      } else {
+        for (size_t i = 0; i < 16u; ++i) {
+          if (!((backport[i] >= '0' && backport[i] <= '9') ||
+                (backport[i] >= 'a' && backport[i] <= 'f'))) {
+            valid = false;
+            break;
+          }
+        }
+        errno = 0;
+        char *end = NULL;
+        unsigned long long value = strtoull(backport, &end, 16);
+        if (!valid || errno || !end || *end)
+          valid = false;
+        else
+          info_out->backport_fingerprint = (uint64_t)value;
+      }
+    }
     (void)strlcpy(info_out->source_path, source_path,
                   sizeof(info_out->source_path));
   }
   free(built);
   return valid;
+}
+
+bool sm_fpkg_cache_backport_matches(
+    const sm_fpkg_cache_generation_info_t *info, const char *backport_path) {
+  if (!info) return false;
+  sm_fpkg_backport_t *backport = NULL;
+  if (sm_fpkg_backport_open(backport_path, &backport) != SM_FPKG_OK)
+    return false;
+  bool matches = info->backport_fingerprint ==
+                 sm_fpkg_backport_fingerprint(backport);
+  sm_fpkg_backport_close(backport);
+  return matches;
 }
 
 static sm_fpkg_status_t read_generation_identity(
@@ -865,7 +926,8 @@ static bool source_metadata_matches(const sm_pkg_info_t *expected,
 static bool generation_matches_source(int title_fd,
                                       const char *generation_name,
                                       const char *title_id,
-                                      const sm_pkg_info_t *source_metadata) {
+                                      const sm_pkg_info_t *source_metadata,
+                                      uint64_t backport_fingerprint) {
   int generation_fd = -1;
   if (read_generation_identity(title_fd, generation_name, title_id, true,
                                &generation_fd, NULL) != SM_FPKG_OK)
@@ -876,6 +938,22 @@ static bool generation_matches_source(int title_fd,
                  source_metadata_matches(source_metadata,
                                          &info.source_metadata) &&
                  generation_executable_modes_valid(generation_fd);
+  if (matches) {
+    char *built = NULL;
+    size_t built_size = 0;
+    char expected[48], recorded[32];
+    (void)snprintf(expected, sizeof(expected), "backport=%016llx",
+                   (unsigned long long)backport_fingerprint);
+    matches = read_owned_file(generation_fd, ".built",
+                              SM_FPKG_CACHE_MANIFEST_LIMIT, &built,
+                              &built_size) == SM_FPKG_OK &&
+              (text_has_line(built, expected) ||
+               (backport_fingerprint == 0 &&
+                !text_line_value(built, "backport=", recorded,
+                                 sizeof(recorded))));
+    free(built);
+    (void)built_size;
+  }
   close(generation_fd);
   return matches;
 }
@@ -939,13 +1017,13 @@ static bool add_owned_cache_file(owned_cache_manifest_t *manifest,
   return true;
 }
 
-static sm_fpkg_status_t parse_owned_cache_manifest(
-    int generation_fd, owned_cache_manifest_t *manifest) {
+static sm_fpkg_status_t parse_owned_cache_manifest_named(
+    int generation_fd, const char *name, owned_cache_manifest_t *manifest) {
   memset(manifest, 0, sizeof(*manifest));
   char *contents = NULL;
   size_t size = 0;
   sm_fpkg_status_t status = read_owned_file(
-      generation_fd, ".built", SM_FPKG_CACHE_MANIFEST_LIMIT, &contents, &size);
+      generation_fd, name, SM_FPKG_CACHE_MANIFEST_LIMIT, &contents, &size);
   if (status != SM_FPKG_OK)
     return status;
   char *cursor = contents;
@@ -1003,6 +1081,11 @@ static sm_fpkg_status_t parse_owned_cache_manifest(
   return SM_FPKG_OK;
 }
 
+static sm_fpkg_status_t parse_owned_cache_manifest(
+    int generation_fd, owned_cache_manifest_t *manifest) {
+  return parse_owned_cache_manifest_named(generation_fd, ".built", manifest);
+}
+
 static bool generation_executable_modes_valid(int generation_fd) {
   owned_cache_manifest_t manifest;
   if (parse_owned_cache_manifest(generation_fd, &manifest) != SM_FPKG_OK)
@@ -1013,7 +1096,7 @@ static bool generation_executable_modes_valid(int generation_fd) {
       continue;
     int parent_fd = -1;
     char leaf[NAME_MAX + 1];
-    struct stat st;
+    struct stat st = {0};
     if (!relative_parent(generation_fd, manifest.files[i].path, false,
                          &parent_fd, leaf)) {
       valid = false;
@@ -1260,6 +1343,406 @@ static bool normalize_cache_root(const char *cache_root,
   return true;
 }
 
+typedef struct {
+  const char **paths;
+  size_t count;
+} writable_conflicts_t;
+
+static int compare_writable_paths(const void *a, const void *b) {
+  return strcasecmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+static bool writable_conflict(const writable_conflicts_t *conflicts,
+                              const char *path, bool check_descendants) {
+  if (is_reserved_cache_path(path))
+    return true;
+  size_t left = 0, right = conflicts->count;
+  while (left < right) {
+    size_t mid = left + (right - left) / 2u;
+    if (strcasecmp(conflicts->paths[mid], path) < 0)
+      left = mid + 1u;
+    else
+      right = mid;
+  }
+  if (left == conflicts->count)
+    return false;
+  if (!strcasecmp(conflicts->paths[left], path))
+    return true;
+  size_t length = strlen(path);
+  return check_descendants &&
+         !strncasecmp(conflicts->paths[left], path, length) &&
+         conflicts->paths[left][length] == '/';
+}
+
+static bool same_writable_stat(const struct stat *a, const struct stat *b) {
+  return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
+         a->st_mode == b->st_mode && a->st_size == b->st_size &&
+         a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
+         a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
+         a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
+         a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+typedef struct {
+  uint64_t xor_hash, sum_hash, count;
+} writable_signature_t;
+
+static void writable_hash_bytes(uint64_t *hash, const void *bytes, size_t size) {
+  const unsigned char *p = bytes;
+  for (size_t i = 0; i < size; ++i) {
+    *hash ^= p[i];
+    *hash *= UINT64_C(1099511628211);
+  }
+}
+
+static bool fingerprint_writable_tree(int source, const char *prefix,
+                                      unsigned depth, writable_signature_t *signature) {
+  if (depth > MAX_PATH / 2u) { errno = ELOOP; return false; }
+  struct stat before, after;
+  if (fstat(source, &before) != 0 || !S_ISDIR(before.st_mode)) return false;
+  int iterator = openat(source, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (iterator < 0) return false;
+  DIR *dir = fdopendir(iterator);
+  if (!dir) { close(iterator); return false; }
+  bool ok = true;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(dir);
+    if (!entry) { if (errno) ok = false; break; }
+    if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+    char path[MAX_PATH];
+    int length = snprintf(path, sizeof(path), "%s%s%s", prefix,
+                          prefix[0] ? "/" : "", entry->d_name);
+    struct stat st = {0};
+    if (length < 0 || (size_t)length >= sizeof(path) ||
+        !safe_relative_path(path) ||
+        fstatat(source, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+      ok = false; break;
+    }
+    if (!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode)) {
+      errno = ENOTSUP; ok = false; break;
+    }
+    uint64_t hash = UINT64_C(14695981039346656037);
+    writable_hash_bytes(&hash, path, (size_t)length + 1u);
+    const uint64_t fields[] = {(uint64_t)st.st_dev, (uint64_t)st.st_ino,
+      (uint64_t)st.st_mode, (uint64_t)st.st_size,
+      (uint64_t)st.st_mtim.tv_sec, (uint64_t)st.st_mtim.tv_nsec,
+      (uint64_t)st.st_ctim.tv_sec, (uint64_t)st.st_ctim.tv_nsec};
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+      uint64_t value = fields[i];
+      for (unsigned byte = 0; byte < 8u; ++byte) {
+        hash ^= (uint8_t)value;
+        hash *= UINT64_C(1099511628211);
+        value >>= 8;
+      }
+    }
+    signature->xor_hash ^= hash;
+    signature->sum_hash += hash;
+    ++signature->count;
+    if (S_ISDIR(st.st_mode)) {
+      int child = openat(source, entry->d_name,
+                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      struct stat opened;
+      ok = child >= 0 && fstat(child, &opened) == 0 &&
+           same_writable_stat(&st, &opened) &&
+           fingerprint_writable_tree(child, path, depth + 1u, signature);
+      if (child >= 0) close(child);
+      if (!ok) break;
+    }
+  }
+  if (closedir(dir) != 0) ok = false;
+  return ok && fstat(source, &after) == 0 && same_writable_stat(&before, &after);
+}
+
+/* Copy only game-created entries. A conflicting file remains in the previous
+ * upper as a retained backup; the new generation's file wins in the sandbox. */
+static bool copy_writable_tree(int source, int destination, const char *prefix,
+                               unsigned depth,
+                               const writable_conflicts_t *conflicts,
+                               char *buffer) {
+  if (depth > MAX_PATH / 2u) { errno = ELOOP; return false; }
+  struct stat before, after;
+  if (fstat(source, &before) != 0 || !S_ISDIR(before.st_mode))
+    return false;
+  int iterator = openat(source, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (iterator < 0) return false;
+  DIR *dir = fdopendir(iterator);
+  if (!dir) { close(iterator); return false; }
+  bool ok = true;
+  for (;;) {
+    errno = 0;
+    struct dirent *entry = readdir(dir);
+    if (!entry) { if (errno) ok = false; break; }
+    if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+    char path[MAX_PATH];
+    int length = snprintf(path, sizeof(path), "%s%s%s", prefix,
+                          prefix[0] ? "/" : "", entry->d_name);
+    if (length < 0 || (size_t)length >= sizeof(path) ||
+        !safe_relative_path(path)) { errno = ENAMETOOLONG; ok = false; break; }
+    struct stat st;
+    if (fstatat(source, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+      ok = false; break;
+    }
+    bool is_dir = S_ISDIR(st.st_mode);
+    if (writable_conflict(conflicts, path, !is_dir)) continue;
+    if (is_dir) {
+      int src = openat(source, entry->d_name,
+                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (src < 0 || mkdirat(destination, entry->d_name, 0700) != 0) {
+        if (src >= 0) close(src);
+        ok = false; break;
+      }
+      int dst = openat(destination, entry->d_name,
+                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      struct stat opened;
+      ok = dst >= 0 && fstat(src, &opened) == 0 && same_writable_stat(&st, &opened) &&
+           copy_writable_tree(src, dst, path, depth + 1u, conflicts, buffer) &&
+           fchmod(dst, st.st_mode & 0777) == 0 && fsync(dst) == 0;
+      if (dst >= 0) close(dst);
+      close(src);
+    } else if (S_ISREG(st.st_mode)) {
+      int src = openat(source, entry->d_name,
+                       O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+      int dst = openat(destination, entry->d_name,
+                       O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+      struct stat opened;
+      ok = src >= 0 && dst >= 0 && fstat(src, &opened) == 0 &&
+           same_writable_stat(&st, &opened);
+      while (ok) {
+        ssize_t count = read(src, buffer, 65536u);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) { ok = false; break; }
+        if (count == 0) break;
+        ok = write_all(dst, buffer, (size_t)count) == SM_FPKG_OK;
+      }
+      ok = ok && fstat(src, &opened) == 0 && same_writable_stat(&st, &opened) &&
+           fchmod(dst, st.st_mode & 0777) == 0 && fsync(dst) == 0;
+      if (src >= 0) close(src);
+      if (dst >= 0 && close(dst) != 0) ok = false;
+    } else if (S_ISLNK(st.st_mode)) {
+      char target[MAX_PATH];
+      ssize_t count = readlinkat(source, entry->d_name, target, sizeof(target) - 1u);
+      if (count < 0 || (size_t)count >= sizeof(target) - 1u) { ok = false; break; }
+      target[count] = '\0';
+      ok = symlinkat(target, destination, entry->d_name) == 0;
+    } else {
+      errno = ENOTSUP;
+      ok = false;
+    }
+    if (!ok) break;
+  }
+  if (closedir(dir) != 0) ok = false;
+  if (ok && (fstat(source, &after) != 0 || !same_writable_stat(&before, &after)))
+    ok = false;
+  return ok;
+}
+
+static bool valid_writable_name(const char *name) {
+  if (!name || strncmp(name, "write-", 6u) != 0 || !name[6] ||
+      strlen(name) >= 96u) return false;
+  for (const char *p = name + 6; *p; ++p)
+    if (!((*p >= '0' && *p <= '9') || *p == '-')) return false;
+  return true;
+}
+
+sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
+    const char *cache_root, const char *title_id, const char *generation_path,
+    char writable_path_out[MAX_PATH]) {
+  if (writable_path_out)
+    writable_path_out[0] = '\0';
+  char root[MAX_PATH];
+  if (!writable_path_out || !generation_path || !valid_title_id(title_id) ||
+      !normalize_cache_root(cache_root, root))
+    return SM_FPKG_CORRUPT;
+  char prefix[MAX_PATH];
+  int length = snprintf(prefix, sizeof(prefix), "%s/%s/", root, title_id);
+  if (length < 0 || (size_t)length >= sizeof(prefix) ||
+      strncmp(generation_path, prefix, (size_t)length) != 0 ||
+      !valid_generation_name(generation_path + length))
+    return SM_FPKG_CORRUPT;
+  const char *generation = generation_path + length;
+  int root_fd = open_directory_path(root, false);
+  if (root_fd < 0) {
+    writable_path_out[0] = '\0';
+    return SM_FPKG_IO;
+  }
+  int title_fd = -1, lock_fd = -1, writable_fd = -1, generation_fd = -1;
+  int source_fd = -1;
+  owned_cache_manifest_t old_manifest = {0}, new_manifest = {0};
+  writable_conflicts_t conflicts = {0};
+  char *pointer = NULL, *built = NULL;
+  char *copy_buffer = NULL;
+  size_t pointer_size = 0, built_size = 0;
+  sm_fpkg_status_t status = SM_FPKG_IO;
+  if (!safe_cache_directory_fd(root_fd)) {
+    status = SM_FPKG_CORRUPT;
+    goto done_writable;
+  }
+  title_fd = openat(root_fd, title_id,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (title_fd < 0)
+    goto done_writable;
+  if (!safe_cache_directory_fd(title_fd)) {
+    status = SM_FPKG_CORRUPT;
+    goto done_writable;
+  }
+  lock_fd = open_title_lock(title_fd, false);
+  if (lock_fd < 0)
+    goto done_writable;
+  status = read_generation_identity(title_fd, generation, title_id, true,
+                                    &generation_fd, NULL);
+  if (status != SM_FPKG_OK) goto done_writable;
+  status = parse_owned_cache_manifest(generation_fd, &new_manifest);
+  if (status != SM_FPKG_OK) goto done_writable;
+  status = read_owned_file(generation_fd, ".built", SM_FPKG_CACHE_MANIFEST_LIMIT,
+                           &built, &built_size);
+  if (status != SM_FPKG_OK) goto done_writable;
+  struct stat before_pointer = {0};
+  int pointer_stat_result = fstatat(title_fd, ".writable-active", &before_pointer,
+                                    AT_SYMLINK_NOFOLLOW);
+  if (pointer_stat_result != 0 && errno != ENOENT) {
+    status = SM_FPKG_IO; goto done_writable;
+  }
+  status = read_owned_file(title_fd, ".writable-active", 512u,
+                           &pointer, &pointer_size);
+  bool had_pointer = status == SM_FPKG_OK;
+  struct stat pointer_identity = {0};
+  if (!had_pointer && !(status == SM_FPKG_UNSUPPORTED && errno == ENOENT))
+    goto done_writable;
+  char old_generation[112] = {0}, old_upper[96] = {0}, old_meta[112] = {0};
+  if (had_pointer) {
+    if (pointer_stat_result != 0 ||
+        fstatat(title_fd, ".writable-active", &pointer_identity,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+        !same_writable_stat(&before_pointer, &pointer_identity) ||
+        !S_ISREG(pointer_identity.st_mode) ||
+        pointer_identity.st_uid != geteuid() || pointer_identity.st_nlink != 1 ||
+        (pointer_identity.st_mode & 0022) != 0) {
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+    if (!text_has_line(pointer, "SM-FPKG-WRITABLE-1") ||
+        !text_line_value(pointer, "generation=", old_generation, sizeof(old_generation)) ||
+        !valid_generation_name(old_generation) ||
+        !text_line_value(pointer, "upper=", old_upper, sizeof(old_upper)) ||
+        !valid_writable_name(old_upper)) {
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+    int meta_length = snprintf(old_meta, sizeof(old_meta), ".meta-%s", old_upper);
+    if (meta_length < 0 || (size_t)meta_length >= sizeof(old_meta)) {
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+    status = parse_owned_cache_manifest_named(title_fd, old_meta, &old_manifest);
+    if (status != SM_FPKG_OK) goto done_writable;
+    source_fd = openat(title_fd, old_upper,
+                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (source_fd < 0 || !safe_cache_directory_fd(source_fd)) {
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+    if (!strcmp(old_generation, generation)) {
+      char *old_built = NULL;
+      size_t old_built_size = 0;
+      status = read_owned_file(title_fd, old_meta, SM_FPKG_CACHE_MANIFEST_LIMIT,
+                               &old_built, &old_built_size);
+      bool same = status == SM_FPKG_OK && old_built_size == built_size &&
+                  !memcmp(old_built, built, built_size);
+      free(old_built);
+      if (!same) { status = SM_FPKG_CORRUPT; goto done_writable; }
+      length = snprintf(writable_path_out, MAX_PATH, "%s/%s/%s", root, title_id, old_upper);
+      status = length > 0 && length < MAX_PATH ? SM_FPKG_OK : SM_FPKG_UNSUPPORTED;
+      goto done_writable;
+    }
+  } else {
+    if (pointer_stat_result == 0) { status = SM_FPKG_CORRUPT; goto done_writable; }
+    source_fd = openat(title_fd, "writable",
+                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (source_fd < 0 && errno != ENOENT) { status = SM_FPKG_CORRUPT; goto done_writable; }
+    if (source_fd >= 0 && !safe_cache_directory_fd(source_fd)) {
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+  }
+  conflicts.count = old_manifest.count + new_manifest.count;
+  conflicts.paths = calloc(conflicts.count ? conflicts.count : 1u, sizeof(*conflicts.paths));
+  if (!conflicts.paths) { status = SM_FPKG_NOMEM; goto done_writable; }
+  for (size_t i = 0; i < old_manifest.count; ++i)
+    conflicts.paths[i] = old_manifest.files[i].path;
+  for (size_t i = 0; i < new_manifest.count; ++i)
+    conflicts.paths[old_manifest.count + i] = new_manifest.files[i].path;
+  qsort(conflicts.paths, conflicts.count, sizeof(*conflicts.paths), compare_writable_paths);
+
+  uint64_t serial = atomic_fetch_add_explicit(&g_cache_generation_counter, 1u,
+                                               memory_order_relaxed);
+  char upper[96], stage[112], meta[112], temporary[112], contents[320];
+  (void)snprintf(upper, sizeof(upper), "write-%ld-%llu", (long)getpid(),
+                 (unsigned long long)serial);
+  (void)snprintf(stage, sizeof(stage), ".stage-%s", upper);
+  (void)snprintf(meta, sizeof(meta), ".meta-%s", upper);
+  (void)snprintf(temporary, sizeof(temporary), ".active-%s", upper);
+  length = snprintf(writable_path_out, MAX_PATH, "%s/%s/%s", root, title_id, upper);
+  if (length < 0 || length >= MAX_PATH) { status = SM_FPKG_UNSUPPORTED; goto done_writable; }
+  if (mkdirat(title_fd, stage, 0700) != 0) { status = SM_FPKG_IO; goto done_writable; }
+  writable_fd = openat(title_fd, stage, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (source_fd >= 0) {
+    copy_buffer = malloc(65536u);
+    if (!copy_buffer) { status = SM_FPKG_NOMEM; goto done_writable; }
+  }
+  writable_signature_t before = {0}, after = {0};
+  if (writable_fd < 0 || (source_fd >= 0 &&
+      (!fingerprint_writable_tree(source_fd, "", 0, &before) ||
+       !copy_writable_tree(source_fd, writable_fd, "", 0, &conflicts, copy_buffer) ||
+       !fingerprint_writable_tree(source_fd, "", 0, &after) ||
+       before.xor_hash != after.xor_hash || before.sum_hash != after.sum_hash ||
+       before.count != after.count)) || fsync(writable_fd) != 0) {
+    status = SM_FPKG_IO; goto done_writable;
+  }
+  status = write_new_file(title_fd, meta, built, built_size, 0600);
+  if (status != SM_FPKG_OK) goto done_writable;
+  if (rename_noreplace(title_fd, stage, title_fd, upper) != 0 || fsync(title_fd) != 0) {
+    status = SM_FPKG_IO; goto done_writable;
+  }
+  length = snprintf(contents, sizeof(contents),
+                    "SM-FPKG-WRITABLE-1\ngeneration=%s\nupper=%s\n",
+                    generation, upper);
+  if (length < 0 || (size_t)length >= sizeof(contents)) {
+    status = SM_FPKG_UNSUPPORTED; goto done_writable;
+  }
+  status = write_new_file(title_fd, temporary, contents, (size_t)length, 0600);
+  if (status != SM_FPKG_OK) goto done_writable;
+  if (had_pointer) {
+    struct stat current_pointer;
+    if (fstatat(title_fd, ".writable-active", &current_pointer,
+                AT_SYMLINK_NOFOLLOW) != 0 ||
+        !same_writable_stat(&pointer_identity, &current_pointer)) {
+      errno = ESTALE;
+      status = SM_FPKG_CORRUPT; goto done_writable;
+    }
+  }
+  int renamed = had_pointer ? renameat(title_fd, temporary, title_fd, ".writable-active")
+                            : rename_noreplace(title_fd, temporary, title_fd, ".writable-active");
+  if (renamed != 0 || fsync(title_fd) != 0) { status = SM_FPKG_IO; goto done_writable; }
+  status = SM_FPKG_OK;
+done_writable:
+  free(pointer);
+  free(built);
+  free(copy_buffer);
+  free(conflicts.paths);
+  free_owned_cache_manifest(&old_manifest);
+  free_owned_cache_manifest(&new_manifest);
+  if (source_fd >= 0) close(source_fd);
+  if (generation_fd >= 0) close(generation_fd);
+  if (writable_fd >= 0)
+    close(writable_fd);
+  if (lock_fd >= 0) {
+    (void)flock(lock_fd, LOCK_UN);
+    close(lock_fd);
+  }
+  if (title_fd >= 0)
+    close(title_fd);
+  close(root_fd);
+  if (status != SM_FPKG_OK)
+    writable_path_out[0] = '\0';
+  return status;
+}
+
 static bool remove_validated_owned_tree(int directory_fd, const char *prefix,
                                         unsigned int depth,
                                         owned_cache_manifest_t *manifest) {
@@ -1439,15 +1922,21 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
   return status;
 }
 
-sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
+sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
     const char *cache_root, const sm_pkg_info_t *source_metadata,
-    char generation_path_out[MAX_PATH]) {
+    const char *backport_path, char generation_path_out[MAX_PATH]) {
   if (generation_path_out)
     generation_path_out[0] = '\0';
   if (!generation_path_out || !source_metadata ||
       !valid_title_id(source_metadata->title_id) ||
       !valid_text_path(source_metadata->path, MAX_PATH))
     return SM_FPKG_CORRUPT;
+  sm_fpkg_backport_t *backport = NULL;
+  sm_fpkg_status_t snapshot_status = sm_fpkg_backport_open(backport_path, &backport);
+  if (snapshot_status != SM_FPKG_OK)
+    return snapshot_status;
+  uint64_t backport_fingerprint = sm_fpkg_backport_fingerprint(backport);
+  sm_fpkg_backport_close(backport);
   char normalized_root[MAX_PATH];
   if (!normalize_cache_root(cache_root, normalized_root))
     return SM_FPKG_CORRUPT;
@@ -1486,7 +1975,7 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
   if (status == SM_FPKG_OK &&
       !generation_matches_source(title_fd, generation_name,
                                  source_metadata->title_id,
-                                 source_metadata))
+                                 source_metadata, backport_fingerprint))
     status = SM_FPKG_UNSUPPORTED;
   if (status == SM_FPKG_OK) {
     int length = snprintf(generation_path_out, MAX_PATH, "%s/%s/%s",
@@ -1503,6 +1992,13 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
   close(title_fd);
   close(root_fd);
   return status;
+}
+
+sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
+    const char *cache_root, const sm_pkg_info_t *source_metadata,
+    char generation_path_out[MAX_PATH]) {
+  return sm_fpkg_cache_find_current_generation_with_backport(
+      cache_root, source_metadata, NULL, generation_path_out);
 }
 
 sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
@@ -1930,6 +2426,42 @@ static sm_fpkg_status_t cache_finish(void *opaque, bool commit) {
   return status;
 }
 
+static sm_fpkg_status_t stage_backport_files(
+    const sm_fpkg_backport_t *backport,
+    const sm_fpkg_index_file_t *files, cache_sink_t *sink) {
+  size_t count = sm_fpkg_backport_count(backport);
+  uint8_t *buffer = count ? malloc(65536u) : NULL;
+  if (count && !buffer)
+    return SM_FPKG_NOMEM;
+  sm_fpkg_status_t status = SM_FPKG_OK;
+  for (size_t i = 0; i < count && status == SM_FPKG_OK; ++i) {
+    if (is_cancelled(sink->options)) { status = SM_FPKG_CANCELLED; break; }
+    int source = sm_fpkg_backport_open_file(backport, i);
+    if (source < 0) { status = SM_FPKG_IO; break; }
+    sm_fpkg_file_t file = {.path = files[i].path, .size = files[i].size};
+    void *context = NULL;
+    status = cache_begin(sink, &file, &context);
+    uint64_t offset = 0;
+    while (status == SM_FPKG_OK && offset < file.size) {
+      size_t chunk = file.size - offset < 65536u
+                         ? (size_t)(file.size - offset) : 65536u;
+      ssize_t got = read(source, buffer, chunk);
+      if (got < 0 && errno == EINTR) continue;
+      if (got <= 0) { status = SM_FPKG_IO; break; }
+      status = cache_write(context, offset, buffer, (size_t)got);
+      offset += (uint64_t)got;
+    }
+    if (close(source) != 0 && status == SM_FPKG_OK)
+      status = SM_FPKG_IO;
+    if (context) {
+      sm_fpkg_status_t finish = cache_finish(context, status == SM_FPKG_OK);
+      if (status == SM_FPKG_OK) status = finish;
+    }
+  }
+  free(buffer);
+  return status;
+}
+
 static bool source_snapshot_matches(int fd, const char *canonical_path,
                                     const sm_pkg_info_t *metadata) {
   struct stat opened, named;
@@ -2075,10 +2607,23 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
     return SM_FPKG_IO;
   }
 
+  sm_fpkg_backport_t *backport = NULL;
+  sm_fpkg_status_t backport_status = sm_fpkg_backport_open(
+      options ? options->backport_path : NULL, &backport);
+  if (backport_status != SM_FPKG_OK) {
+    (void)flock(lock_fd, LOCK_UN);
+    close(lock_fd);
+    close(title_fd);
+    close(root_fd);
+    return backport_status;
+  }
+  uint64_t backport_fingerprint = sm_fpkg_backport_fingerprint(backport);
+
   char active_generation[112];
   sm_fpkg_status_t status = read_active_generation(
       title_fd, metadata->title_id, active_generation);
   if (status != SM_FPKG_OK) {
+    sm_fpkg_backport_close(backport);
     (void)flock(lock_fd, LOCK_UN);
     close(lock_fd);
     close(title_fd);
@@ -2087,7 +2632,8 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   }
   if (active_generation[0] &&
       generation_matches_source(title_fd, active_generation,
-                                 metadata->title_id, metadata)) {
+                                 metadata->title_id, metadata,
+                                 backport_fingerprint)) {
     int path_length = snprintf(generation_path_out, MAX_PATH, "%s/%s/%s",
                                normalized_cache_root, metadata->title_id,
                                active_generation);
@@ -2095,6 +2641,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       generation_path_out[0] = '\0';
       status = SM_FPKG_UNSUPPORTED;
     }
+    sm_fpkg_backport_close(backport);
     (void)flock(lock_fd, LOCK_UN);
     close(lock_fd);
     close(title_fd);
@@ -2103,11 +2650,42 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   }
   bool had_active_generation = active_generation[0] != '\0';
 
-  selector_ctx_t selector = {should_extract_fn, extract_ctx};
+  size_t override_count = sm_fpkg_backport_count(backport);
+  sm_fpkg_index_file_t *overrides = override_count
+      ? calloc(override_count, sizeof(*overrides)) : NULL;
+  if (override_count && !overrides) {
+    sm_fpkg_backport_close(backport);
+    (void)flock(lock_fd, LOCK_UN);
+    close(lock_fd);
+    close(title_fd);
+    close(root_fd);
+    return SM_FPKG_NOMEM;
+  }
+  if (override_count) {
+    memcpy(overrides, sm_fpkg_backport_files(backport),
+           override_count * sizeof(*overrides));
+    for (size_t i = 0; i < sm_fpkg_file_count(fpkg); ++i) {
+      sm_fpkg_file_t file;
+      if (!sm_fpkg_file_at(fpkg, i, &file) || file.is_directory)
+        continue;
+      size_t match = sm_fpkg_backport_find(backport, file.path);
+      if (match != SIZE_MAX)
+        overrides[match].path = file.path;
+    }
+  }
+  selector_ctx_t selector = {should_extract_fn, extract_ctx, backport, overrides};
   cache_text_t built = {0};
   status = append_identity(
       &built, metadata->title_id, canonical_source, metadata,
       source_fingerprint(metadata));
+  if (status == SM_FPKG_OK) {
+    char line[48];
+    int length = snprintf(line, sizeof(line), "backport=%016llx\n",
+                          (unsigned long long)backport_fingerprint);
+    status = length > 0 && (size_t)length < sizeof(line)
+                 ? append_text(&built, line, (size_t)length)
+                 : SM_FPKG_UNSUPPORTED;
+  }
   uint64_t extract_bytes = 0;
   size_t extract_count = 0;
   bool has_eboot = false, has_metadata = false;
@@ -2120,8 +2698,9 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   (void)extract_count;
   sm_fpkg_index_blob_t index = {0}, manifest = {0};
   if (status == SM_FPKG_OK)
-    status = sm_fpkg_index_build_package(
-        fpkg, skip_package_index_file, &selector,
+    status = sm_fpkg_index_build_package_with_overrides(
+        fpkg, select_loose_file, &selector, skip_package_index_file, NULL,
+        overrides, override_count,
         (int64_t)metadata->source_mtime, &index, &manifest);
   char image_link[NAME_MAX + 16];
   int image_link_length = -1;
@@ -2218,6 +2797,8 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       }
       if (file.is_directory || !select_loose_file(file.path, &selector))
         continue;
+      if (sm_fpkg_backport_find(backport, file.path) != SIZE_MAX)
+        continue;
       status = sm_fpkg_extract_file((sm_fpkg_t *)fpkg, i, &sink);
       if (status != SM_FPKG_OK)
         break;
@@ -2227,12 +2808,16 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       }
     }
   }
+  if (status == SM_FPKG_OK)
+    status = stage_backport_files(backport, overrides, &sink_ctx);
   if (status == SM_FPKG_OK && sink_ctx.total_written != extract_bytes)
     status = SM_FPKG_CORRUPT;
   if (status == SM_FPKG_OK && is_cancelled(options))
     status = SM_FPKG_CANCELLED;
   if (status == SM_FPKG_OK && !source_snapshot_matches(
                                    source_fd, canonical_source, metadata))
+    status = SM_FPKG_UNSUPPORTED;
+  if (status == SM_FPKG_OK && !sm_fpkg_backport_unchanged(backport))
     status = SM_FPKG_UNSUPPORTED;
   if (status == SM_FPKG_OK)
     status = write_cache_artifacts(stage_fd, canonical_source,
@@ -2278,6 +2863,8 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   sm_fpkg_index_blob_free(&index);
   sm_fpkg_index_blob_free(&manifest);
   free(built.data);
+  free(overrides);
+  sm_fpkg_backport_close(backport);
   (void)flock(lock_fd, LOCK_UN);
   close(lock_fd);
   close(title_fd);

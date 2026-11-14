@@ -186,6 +186,14 @@ SMP's existing TitleDir registration and mount lifecycle. At launch, SMP
 exposes the package parent read-only at `/app0/kraken` for AMPR NG. The original
 package must remain available at its source path.
 
+Matching backport files are staged as loose files and take precedence in the
+AMPR indexes. When the backport changes, the cached generation is rebuilt.
+Game writes to `/app0` use a separate per-title writable layer. On a generation
+change, game-created files are carried forward; files that conflict with
+generated files remain in the previous layer as a backup. Previous layers are
+retained and can consume additional storage. Special filesystem entries that
+cannot be safely copied stop the migration and leave the old layer intact.
+
 Here, `.pkg` means a PS5 package, not SMP's `.ffpkg` UFS2 image. The current
 scanner routes packages only when SMP's shared metadata parser confidently
 classifies them as base titles; updates and DLC are not registered by this

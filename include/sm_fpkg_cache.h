@@ -16,6 +16,7 @@ typedef struct {
   uint64_t max_extract_bytes;
   sm_fpkg_cache_cancel_fn is_cancelled;
   void *cancel_ctx;
+  const char *backport_path;
 } sm_fpkg_cache_options_t;
 
 typedef struct {
@@ -29,6 +30,7 @@ typedef struct {
   char generation_path[MAX_PATH];
   char source_path[MAX_PATH];
   sm_pkg_info_t source_metadata;
+  uint64_t backport_fingerprint;
   bool source_matches_snapshot;
 } sm_fpkg_cache_generation_info_t;
 
@@ -36,6 +38,13 @@ typedef bool (*sm_fpkg_cache_cleanup_begin_fn)(const char *title_id,
                                                 const char *generation_path,
                                                 void *ctx);
 typedef void (*sm_fpkg_cache_cleanup_end_fn)(void *ctx);
+
+/* Persistent per-title upper directory for game-created app0 files. It is
+ * outside all generations and is never removed by generation cleanup. */
+sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
+    const char *cache_root, const char *title_id,
+    const char *generation_path,
+    char writable_path_out[MAX_PATH]);
 
 /*
  * Build one immutable cache generation for a validated package. The source fd
@@ -64,6 +73,9 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
 sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
     const char *cache_root, const sm_pkg_info_t *source_metadata,
     char generation_path_out[MAX_PATH]);
+sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
+    const char *cache_root, const sm_pkg_info_t *source_metadata,
+    const char *backport_path, char generation_path_out[MAX_PATH]);
 
 /* Read the source identity captured in one published generation. The source
  * match flag is false when the recorded file was replaced or is unavailable;
@@ -80,6 +92,8 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
  */
 bool sm_fpkg_cache_source_matches_remounted_image(
     const sm_fpkg_cache_generation_info_t *info);
+bool sm_fpkg_cache_backport_matches(
+    const sm_fpkg_cache_generation_info_t *info, const char *backport_path);
 
 /* Remove one inactive immutable generation only after its ownership manifest
  * and complete tree have been validated. The required begin/end callbacks must

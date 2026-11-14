@@ -798,10 +798,20 @@ static bool try_collect_candidate_for_fpkg(
   bool has_tracked_path = read_mount_link(package_info.title_id, tracked_path,
                                           sizeof(tracked_path));
   char active_generation[MAX_PATH] = {0};
-  bool same_source_generation =
-      sm_fpkg_cache_find_current_generation(SM_FPKG_CACHE_DEFAULT_ROOT,
-                                             &package_info,
-                                             active_generation) == SM_FPKG_OK;
+  char backport_path[MAX_PATH] = {0};
+  (void)resolve_backport_path_for_title(package_info.title_id, NULL,
+                                        backport_path);
+  sm_fpkg_status_t generation_status =
+      sm_fpkg_cache_find_current_generation_with_backport(
+          SM_FPKG_CACHE_DEFAULT_ROOT, &package_info,
+          backport_path[0] ? backport_path : NULL, active_generation);
+  if (generation_status != SM_FPKG_OK &&
+      generation_status != SM_FPKG_UNSUPPORTED) {
+    if (unstable_found_out)
+      *unstable_found_out = true;
+    return true;
+  }
+  bool same_source_generation = generation_status == SM_FPKG_OK;
   if (same_source_generation && installed && appmeta_present &&
       has_tracked_path && strcmp(tracked_path, active_generation) == 0 &&
       directory_has_game_executable(active_generation)) {
@@ -817,7 +827,14 @@ static bool try_collect_candidate_for_fpkg(
     return true;
   }
 
-  if (installed && appmeta_present && has_tracked_path &&
+  sm_fpkg_cache_generation_info_t tracked_generation = {0};
+  bool tracked_same_package = has_tracked_path &&
+      path_matches_root_or_child(tracked_path, SM_FPKG_CACHE_DEFAULT_ROOT) &&
+      sm_fpkg_cache_read_generation_info(
+          SM_FPKG_CACHE_DEFAULT_ROOT, package_info.title_id, tracked_path,
+          &tracked_generation) == SM_FPKG_OK &&
+      !strcmp(tracked_generation.source_path, full_path);
+  if (installed && appmeta_present && has_tracked_path && !tracked_same_package &&
       strcmp(tracked_path, full_path) != 0 &&
       (is_data_mounted(package_info.title_id) ||
        (is_under_image_mount_base(tracked_path) &&

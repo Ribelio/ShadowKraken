@@ -80,6 +80,10 @@ static bool synthetic_image_mount_succeeds;
 static bool synthetic_remount_changes_md_identity;
 static bool synthetic_remounted_snapshot_matches;
 static bool image_index_record_succeeds = true;
+static bool backport_matches = true;
+static const char *test_backport_path;
+static sm_fpkg_status_t fake_find_status = SM_FPKG_UNSUPPORTED;
+static bool fake_installed, fake_data_mounted;
 static unsigned image_index_record_calls;
 static unsigned prepare_image_source_calls;
 static bool prepare_image_source_succeeds = true;
@@ -310,11 +314,11 @@ bool app_db_title_list_contains(const struct AppDbTitleList *list,
                                 const char *title_id) {
   (void)list;
   (void)title_id;
-  return false;
+  return fake_installed;
 }
 bool get_appmeta_present_for_scan_cycle(const char *title_id) {
   (void)title_id;
-  return false;
+  return fake_installed;
 }
 void note_found_title(const char *title_id) { (void)title_id; }
 bool request_blocked_ppsa_uninstall(const char *title_id,
@@ -330,7 +334,7 @@ bool wait_for_stability_fast(const char *path, const char *name) {
 }
 bool is_installed(const char *title_id) {
   (void)title_id;
-  return false;
+  return fake_installed;
 }
 bool read_mount_link(const char *title_id, char *out, size_t out_size) {
   assert(strcmp(title_id, k_title) == 0);
@@ -344,7 +348,7 @@ bool directory_has_game_executable(const char *dir_path) {
 }
 bool is_data_mounted(const char *title_id) {
   (void)title_id;
-  return false;
+  return fake_data_mounted;
 }
 bool read_mount_image_link(const char *title_id, char *out, size_t out_size) {
   (void)title_id;
@@ -393,25 +397,47 @@ void sm_manual_note_installed(const char *manual_source_path,
   (void)title_id;
   (void)title_name;
 }
-sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
+bool resolve_backport_path_for_title(const char *title_id,
+                                     const char *root,
+                                     char path[MAX_PATH]) {
+  (void)title_id; (void)root;
+  if (test_backport_path) {
+    (void)strlcpy(path, test_backport_path, MAX_PATH);
+    return true;
+  }
+  path[0] = '\0';
+  return false;
+}
+sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
     const char *cache_root, const sm_pkg_info_t *source_info,
-    char generation_path_out[MAX_PATH]) {
+    const char *backport_path, char generation_path_out[MAX_PATH]) {
   assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
+  assert((!backport_path && !test_backport_path) ||
+         (backport_path && test_backport_path &&
+          !strcmp(backport_path, test_backport_path)));
   assert(source_info && strcmp(source_info->title_id, k_title) == 0);
   (void)generation_path_out;
-  return SM_FPKG_UNSUPPORTED;
+  return fake_find_status;
 }
 sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
     const char *cache_root, const char *title_id, const char *generation_path,
     sm_fpkg_cache_generation_info_t *info_out) {
   assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
   assert(strcmp(title_id, k_title) == 0);
-  assert(strcmp(generation_path, expected_generation_path) == 0);
+  if (strcmp(generation_path, expected_generation_path) != 0)
+    return SM_FPKG_UNSUPPORTED;
   ++generation_info_calls;
   record_event("cache info");
   if (generation_info_status == SM_FPKG_OK)
     *info_out = generation_info;
   return generation_info_status;
+}
+bool sm_fpkg_cache_backport_matches(
+    const sm_fpkg_cache_generation_info_t *info, const char *backport_path) {
+  assert(info && ((!backport_path && !test_backport_path) ||
+                  (backport_path && test_backport_path &&
+                   !strcmp(backport_path, test_backport_path))));
+  return backport_matches;
 }
 static bool prepare_image_source(const char *title_id,
                                  const char *runtime_source,
@@ -494,6 +520,9 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   assert(should_extract_fn == NULL && extract_ctx == NULL);
   assert(options && options->max_extract_bytes ==
                           SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT);
+  assert((!options->backport_path && !test_backport_path) ||
+         (options->backport_path && test_backport_path &&
+          !strcmp(options->backport_path, test_backport_path)));
   assert(options->is_cancelled &&
          !options->is_cancelled(options->cancel_ctx));
   ++fake_cache_build_count;
@@ -666,6 +695,11 @@ static void test_fpkg_sandbox_mount_route(void) {
                 sizeof(g_fakelib_mount.fpkg_generation_path));
   (void)strlcpy(g_fakelib_mount.fpkg_source_directory, "/tmp",
                 sizeof(g_fakelib_mount.fpkg_source_directory));
+  backport_matches = false;
+  errno = 0;
+  assert(!mount_fpkg_source_if_needed() && errno == ESTALE);
+  assert(sandbox_calls == 0);
+  backport_matches = true;
   assert(mount_fpkg_source_if_needed());
   assert(sandbox_calls == 1);
 
@@ -848,6 +882,7 @@ static void test_candidate_to_registered_launch_flow(void) {
                 sizeof(generation_info.source_path));
   generation_info.source_matches_snapshot = true;
   generation_info_status = SM_FPKG_OK;
+  test_backport_path = "/tmp/synthetic-backport";
   fpkg_feature_enabled = true;
   generation_info_calls = 0;
   fake_fpkg_open_count = 0;
@@ -950,8 +985,29 @@ static void test_candidate_to_registered_launch_flow(void) {
   assert(strcmp(events[1], "cache info") == 0);
   assert(strcmp(events[2], "sandbox mount") == 0);
 
+  fake_find_status = SM_FPKG_IO;
+  candidate_count = 0;
+  unstable_found = false;
+  assert(try_collect_candidate_for_fpkg(
+      expected_source_path, candidates, 2, &candidate_count, &app_db, NULL,
+      &unstable_found));
+  assert(candidate_count == 0 && unstable_found);
+  fake_find_status = SM_FPKG_UNSUPPORTED;
+  fake_installed = true;
+  fake_data_mounted = true;
+  (void)strlcpy(mount_link_path, expected_generation_path, sizeof(mount_link_path));
+  candidate_count = 0;
+  unstable_found = false;
+  assert(try_collect_candidate_for_fpkg(
+      expected_source_path, candidates, 2, &candidate_count, &app_db, NULL,
+      &unstable_found));
+  assert(candidate_count == 1 && !unstable_found && candidates[0].fpkg);
+  fake_installed = false;
+  fake_data_mounted = false;
+
   assert(unlink(expected_source_path) == 0);
   assert(rmdir(parent) == 0);
+  test_backport_path = NULL;
 }
 
 int main(void) {
