@@ -995,7 +995,7 @@
                 </select></label>
                 <p class="subtle console-hint" data-i18n="fakelibNextLaunch">Changes apply on the next game launch.</p>
                 <label class="check console-setting"><span data-i18n="fpkgDirectMount">Direct-mount plaintext debug FPKG</span><input id="fpkgDirectMount" form="settingsForm" type="checkbox" role="switch"></label>
-                <p class="subtle console-hint" data-i18n="fpkgDirectMountHint">Experimental. Off by default.</p>
+                <p class="subtle console-hint" data-i18n="fpkgDirectMountHint">Experimental. Enabled by default; set off in config to disable.</p>
                 <label class="check console-setting"><span data-i18n="updateFakelibEmulators">Update game fakelib emulators</span><input id="updateEmulators" form="settingsForm" type="checkbox" role="switch"></label>
                 <label class="check console-setting"><span data-i18n="autoUpdateAmpr">Update AMPR emulator from GitHub</span><input id="autoUpdateAmpr" form="settingsForm" type="checkbox" role="switch"></label>
               </div>
@@ -3049,11 +3049,11 @@
       }
       Object.assign(translations["en-US"], {
         fpkgDirectMount: "Direct-mount plaintext debug FPKG",
-        fpkgDirectMountHint: "Experimental. Scans and stages compatible plaintext debug FPKG sources; off by default."
+        fpkgDirectMountHint: "Experimental. Scans and stages compatible plaintext debug FPKG sources by default; set off to disable."
       });
       Object.assign(translations["ru-RU"], {
         fpkgDirectMount: "Прямое монтирование plaintext debug FPKG",
-        fpkgDirectMountHint: "Экспериментально. Сканирует и подготавливает совместимые plaintext debug FPKG; по умолчанию выключено."
+        fpkgDirectMountHint: "Экспериментально. Сканирует и подготавливает совместимые plaintext debug FPKG по умолчанию; задайте off, чтобы отключить."
       });
       translations["en-GB"] = translations["en-US"];
       translations["es-MX"] = translations["es-ES"];
