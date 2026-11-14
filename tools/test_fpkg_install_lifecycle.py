@@ -21,6 +21,26 @@ def main():
         r"fpkg_cache_cancel_context_t;", install_source)
     if not cache_cancel_type:
         raise RuntimeError("Cannot find FPKG cache cancellation context")
+    scan_source = (root / "src/sm_scan.c").read_text(encoding="utf-8")
+    scan_context_type = re.search(
+        r"typedef struct \{\s*const struct AppDbTitleList \*titles;\s*"
+        r"const struct AppDbTitleList \*blocked_ppsa_titles;\s*"
+        r"bool titles_ready;\s*bool blocked_ppsa_titles_ready;\s*"
+        r"\} scan_app_db_context_t;", scan_source)
+    if not scan_context_type:
+        raise RuntimeError("Cannot find FPKG scan app database context")
+    scan_dependencies = """
+void note_found_title(const char *title_id);
+bool request_blocked_ppsa_uninstall(const char *title_id,
+                                    const char *source_path);
+bool get_appmeta_present_for_scan_cycle(const char *title_id);
+bool wait_for_stability_fast(const char *path, const char *name);
+"""
+    scan = functions(root, "src/sm_scan.c", [
+        "find_scan_candidate_index_by_title_id", "mark_scan_candidate_manual",
+        "notify_duplicate_scan_candidate", "defer_full_candidate_batch",
+        "is_blocked_ppsa_title", "try_collect_candidate_for_fpkg",
+        "is_native_fpkg_path"])
     install = functions(root, "src/sm_install.c", [
         "fpkg_cache_build_cancelled", "prepare_fpkg_candidate",
         "sm_install_register_title_dir", "mount_and_install"])
@@ -30,6 +50,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="sm-fpkg-install-lifecycle-") as directory:
         build = Path(directory)
         (build / "install_lifecycle.inc").write_text(
+            scan_context_type.group(0) + "\n\n" + scan_dependencies +
+            "\n" + scan + "\n\n" +
             cache_cancel_type.group(0) + "\n\n" + install + "\n\n" +
             fakelib, encoding="utf-8")
         binary = build / "install_lifecycle"

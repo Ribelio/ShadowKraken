@@ -2,16 +2,21 @@
 #include "host_platform.h"
 #include "sm_appdb.h"
 #include "sm_config_mount.h"
+#include "sm_game_cache.h"
 #include "sm_fpkg_cache.h"
 #include "sm_fpkg.h"
 #include "sm_filesystem.h"
 #include "sm_image_cache.h"
+#include "sm_image_index.h"
 #include "sm_install.h"
+#include "sm_install_queue.h"
 #include "sm_l10n.h"
 #include "sm_limits.h"
 #include "sm_log.h"
+#include "sm_manual.h"
 #include "sm_path_utils.h"
 #include "sm_paths.h"
+#include "sm_pkg.h"
 #include "sm_runtime.h"
 #include "sm_shellcore_hooks.h"
 #include "sm_shellcore_service.h"
@@ -66,6 +71,7 @@ static char expected_source_path[MAX_PATH];
 static unsigned fake_fpkg_open_count;
 static unsigned fake_fpkg_close_count;
 static unsigned fake_cache_build_count;
+static sm_fpkg_status_t fake_fpkg_open_status = SM_FPKG_OK;
 static bool external_mutation_active;
 
 static bool copy_sce_sys_to_appmeta(const char *src, const char *dst);
@@ -125,6 +131,16 @@ static int test_unlink(const char *path) {
 bool is_under_image_mount_base(const char *path) {
   (void)path;
   return false;
+}
+const char *get_filename_component(const char *path) {
+  const char *separator = strrchr(path, '/');
+  return separator ? separator + 1 : path;
+}
+void notify_duplicate_title_once(const char *title_id, const char *path_a,
+                                 const char *path_b) {
+  (void)title_id;
+  (void)path_a;
+  (void)path_b;
 }
 size_t resolve_image_source_chain_from_mount_cache(
     const char *path, char chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH]) {
@@ -228,6 +244,96 @@ bool sm_shellcore_install_title_dir(const char *title_id,
 bool sm_config_fpkg_direct_mount_enabled(void) {
   return fpkg_feature_enabled;
 }
+bool app_db_title_list_contains(const struct AppDbTitleList *list,
+                                const char *title_id) {
+  (void)list;
+  (void)title_id;
+  return false;
+}
+bool get_appmeta_present_for_scan_cycle(const char *title_id) {
+  (void)title_id;
+  return false;
+}
+void note_found_title(const char *title_id) { (void)title_id; }
+bool request_blocked_ppsa_uninstall(const char *title_id,
+                                    const char *source_path) {
+  (void)title_id;
+  (void)source_path;
+  return false;
+}
+bool wait_for_stability_fast(const char *path, const char *name) {
+  (void)path;
+  (void)name;
+  return true;
+}
+bool is_installed(const char *title_id) {
+  (void)title_id;
+  return false;
+}
+bool read_mount_link(const char *title_id, char *out, size_t out_size) {
+  (void)title_id;
+  (void)out;
+  (void)out_size;
+  return false;
+}
+bool directory_has_game_executable(const char *dir_path) {
+  (void)dir_path;
+  return false;
+}
+bool is_data_mounted(const char *title_id) {
+  (void)title_id;
+  return false;
+}
+bool read_mount_image_link(const char *title_id, char *out, size_t out_size) {
+  (void)title_id;
+  (void)out;
+  (void)out_size;
+  return false;
+}
+bool sm_image_index_source_has_title(const char *path, const char *title_id) {
+  (void)path;
+  (void)title_id;
+  return false;
+}
+void note_game_cache_source_seen(const char *path, const char *title_id,
+                                 const char *title_name) {
+  (void)path;
+  (void)title_id;
+  (void)title_name;
+}
+bool is_title_install_pending(const char *title_id) {
+  (void)title_id;
+  return false;
+}
+bool was_register_attempted(const char *title_id) {
+  (void)title_id;
+  return false;
+}
+uint8_t get_failed_mount_attempts(const char *title_id) {
+  (void)title_id;
+  return 0;
+}
+void cache_game_entry(const char *path, const char *title_id,
+                      const char *title_name) {
+  (void)path;
+  (void)title_id;
+  (void)title_name;
+}
+void sm_manual_note_installed(const char *manual_source_path,
+                              const char *title_id,
+                              const char *title_name) {
+  (void)manual_source_path;
+  (void)title_id;
+  (void)title_name;
+}
+sm_fpkg_status_t sm_fpkg_cache_find_current_generation(
+    const char *cache_root, const sm_pkg_info_t *source_info,
+    char generation_path_out[MAX_PATH]) {
+  assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
+  assert(source_info && strcmp(source_info->title_id, k_title) == 0);
+  (void)generation_path_out;
+  return SM_FPKG_UNSUPPORTED;
+}
 sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
     const char *cache_root, const char *title_id, const char *generation_path,
     sm_fpkg_cache_generation_info_t *info_out) {
@@ -247,6 +353,8 @@ bool sm_pkg_parse_fd(const char *path, int fd, sm_pkg_info_t *info_out) {
   memset(info_out, 0, sizeof(*info_out));
   (void)strlcpy(info_out->title_id, k_title, sizeof(info_out->title_id));
   (void)strlcpy(info_out->path, path, sizeof(info_out->path));
+  (void)strlcpy(info_out->title_name, "Synthetic debug FPKG",
+                sizeof(info_out->title_name));
   info_out->pkg_kind = PKG_KIND_BASE;
   info_out->pkg_classification_confident = true;
   record_event("pkg parse");
@@ -259,8 +367,10 @@ sm_fpkg_status_t sm_fpkg_open_fd(const char *path, int fd,
   assert(fd >= 0 && metadata && strcmp(metadata->title_id, k_title) == 0);
   ++fake_fpkg_open_count;
   record_event("FPKG reader");
-  *fpkg_out = (sm_fpkg_t *)(uintptr_t)1u;
-  return SM_FPKG_OK;
+  *fpkg_out = fake_fpkg_open_status == SM_FPKG_OK
+                  ? (sm_fpkg_t *)(uintptr_t)1u
+                  : NULL;
+  return fake_fpkg_open_status;
 }
 void sm_fpkg_close(sm_fpkg_t *fpkg) {
   assert(fpkg == (sm_fpkg_t *)(uintptr_t)1u);
@@ -528,20 +638,48 @@ static void test_candidate_to_registered_launch_flow(void) {
   fake_fpkg_open_count = 0;
   fake_fpkg_close_count = 0;
   fake_cache_build_count = 0;
+  fake_fpkg_open_status = SM_FPKG_OK;
   reset_events();
 
-  scan_candidate_t candidate = {0};
-  (void)strlcpy(candidate.path, expected_source_path, sizeof(candidate.path));
-  (void)strlcpy(candidate.title_id, k_title, sizeof(candidate.title_id));
-  (void)strlcpy(candidate.title_name, "Synthetic debug FPKG",
-                sizeof(candidate.title_name));
-  candidate.fpkg = true;
+  assert(is_native_fpkg_path(expected_source_path));
+  assert(is_native_fpkg_path("/source/UPPER.PKG"));
+  assert(!is_native_fpkg_path("/source/game.pkg.bak"));
+  scan_app_db_context_t app_db = {.titles_ready = true};
+  scan_candidate_t candidates[1] = {0};
+  int candidate_count = 0;
+  bool unstable_found = false;
+  fpkg_feature_enabled = false;
+  assert(try_collect_candidate_for_fpkg(
+      expected_source_path, candidates, 1, &candidate_count, &app_db, NULL,
+      &unstable_found));
+  assert(candidate_count == 0 && fake_fpkg_open_count == 0);
+
+  fpkg_feature_enabled = true;
+  fake_fpkg_open_status = SM_FPKG_UNSUPPORTED;
+  assert(try_collect_candidate_for_fpkg(
+      expected_source_path, candidates, 1, &candidate_count, &app_db, NULL,
+      &unstable_found));
+  assert(candidate_count == 0 && fake_fpkg_open_count == 1 &&
+         fake_fpkg_close_count == 0);
+
+  fake_fpkg_open_status = SM_FPKG_OK;
+  assert(try_collect_candidate_for_fpkg(
+      expected_source_path, candidates, 1, &candidate_count, &app_db, NULL,
+      &unstable_found));
+  assert(candidate_count == 1 && !unstable_found);
+  scan_candidate_t *candidate = &candidates[0];
+  assert(candidate->fpkg && !candidate->installed && !candidate->in_app_db &&
+         strcmp(candidate->path, expected_source_path) == 0 &&
+         strcmp(candidate->title_id, k_title) == 0);
+  assert(fake_fpkg_open_count == 2 && fake_fpkg_close_count == 1);
+
+  reset_events();
   char previous_generation[MAX_PATH];
-  assert(prepare_fpkg_candidate(&candidate, previous_generation));
-  assert(!candidate.fpkg &&
-         strcmp(candidate.path, expected_generation_path) == 0);
+  assert(prepare_fpkg_candidate(candidate, previous_generation));
+  assert(!candidate->fpkg &&
+         strcmp(candidate->path, expected_generation_path) == 0);
   assert(previous_generation[0] == '\0' && !external_mutation_active);
-  assert(fake_fpkg_open_count == 1 && fake_fpkg_close_count == 1 &&
+  assert(fake_fpkg_open_count == 3 && fake_fpkg_close_count == 2 &&
          fake_cache_build_count == 1 && generation_info_calls == 1);
   assert(event_count == 7);
   assert(strcmp(events[0], "mutation begin") == 0);
@@ -555,7 +693,7 @@ static void test_candidate_to_registered_launch_flow(void) {
   reset_events();
   bridge_enabled = false;
   api_result = 0;
-  assert(mount_and_install(candidate.path, k_title, candidate.title_name,
+  assert(mount_and_install(candidate->path, k_title, candidate->title_name,
                            false, true, false, NULL));
   assert(event_count == 3 && api_calls == 1);
   assert(strcmp(events[0], "nullfs mount") == 0);
@@ -565,7 +703,7 @@ static void test_candidate_to_registered_launch_flow(void) {
   reset_events();
   generation_info_calls = 0;
   char source_directory[MAX_PATH];
-  assert(resolve_fpkg_source_directory(k_title, candidate.path,
+  assert(resolve_fpkg_source_directory(k_title, candidate->path,
                                        source_directory));
   assert(strcmp(source_directory, parent) == 0 && generation_info_calls == 1);
   memset(&g_fakelib_mount, 0, sizeof(g_fakelib_mount));
@@ -591,6 +729,6 @@ int main(void) {
   test_fpkg_sandbox_mount_route();
   test_fpkg_source_parent_resolution();
   test_candidate_to_registered_launch_flow();
-  puts("FPKG candidate-to-launch routing: source preparation, registration, rollback, layer reuse, and read-only sandbox target passed");
+  puts("FPKG scan-to-launch routing: candidate selection, source preparation, registration, rollback, and read-only sandbox target passed");
   return 0;
 }
