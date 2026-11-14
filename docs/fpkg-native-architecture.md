@@ -14,7 +14,7 @@ work. No game package or PS5 SDK is present in the host environment.
 | Kraken Mount | `4b420d579bd381796d773875e36d14c9acaabf39` (`main`) | GPL-3.0-or-later | Reader, decoder, cache, index writer and launch reference. |
 | ampr-emu-ng | `152274fba34636d688aff0c2887196c1c66c300e` (`main`) | GPL-3.0-or-later | Current source includes FPKG mode. Kraken bundles runtime v0.4.0. |
 | bundled AMPR runtime | v0.4.0, SHA-256 `8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218` | GPL-3.0-or-later | Kraken `vendor/ampr-emu-ng/SHA256SUMS`; binary is not copied into SMP. |
-| ps5-dump-forge | repository states GPL-3.0 | GPL-3.0 | FPKG format provenance cited by Kraken; no dump-forge code or assets copied. |
+| ps5-dump-forge | `8a3c7d3e4bfeac3b4ddf8e9ff020e819ae8ff1cd` (`main`) | GPL-3.0 | Its Rust tests generate temporary plaintext FPKGs from synthetic files; no game content or fixture binary is shipped. |
 
 SMP, Kraken Mount, ampr-emu-ng and ps5-dump-forge all state GPL-3.0-compatible
 terms. A native port derived from Kraken remains GPL-covered; it must preserve
@@ -132,7 +132,8 @@ blockers are in [fpkg-test-results.md](fpkg-test-results.md).
 Planned implementation areas, gated in order:
 
 1. `src/sm_fpkg*.c`, `include/sm_fpkg*.h`, host-only FPKG tests and attribution:
-   bounded reader/parser/decoder. Do not duplicate `sm_pkg` metadata handling.
+   bounded reader/parser/decoder. The implemented probe currently stops after
+   the outer PFS metadata entries. Do not duplicate `sm_pkg` metadata handling.
 2. Native AMPR index writer and byte-comparison tests against pinned reference.
 3. Existing cache owner, with transaction journal, source fingerprint and disabled
    configuration key in `sm_config_mount.c`, config file/API surfaces as needed.

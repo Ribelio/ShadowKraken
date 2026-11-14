@@ -3,7 +3,8 @@ Third-party source attributions for ShadowMountPlus
 The native FPKG reader in src/sm_fpkg.c follows format handling in
 quer3q/kraken-mount, revision 4b420d579bd381796d773875e36d14c9acaabf39,
 licensed GPL-3.0-or-later, and format descriptions attributed there to
-quer3q/ps5-dump-forge, also GPL-3.0-or-later. This file records provenance;
+quer3q/ps5-dump-forge (revision 8a3c7d3e4bfeac3b4ddf8e9ff020e819ae8ff1cd),
+also GPL-3.0-or-later. This file records provenance;
 the implementation is a C port and is distributed under the repository's
 GPL-3.0 license. No game package, game asset, Kraken binary, Rust runtime, or
 AMPR binary is included.

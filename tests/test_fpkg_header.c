@@ -7,8 +7,12 @@
 #include "sm_fpkg.h"
 
 #define OUTER_BLOCK 0x10000u
-#define CNT_OFFSET 0x20000u
+#define OUTER_BLOCK_COUNT 6u
+#define PFS_SIZE (OUTER_BLOCK * OUTER_BLOCK_COUNT)
+#define PFS_END (OUTER_BLOCK + PFS_SIZE)
+#define CNT_OFFSET PFS_END
 #define FILE_SIZE (CNT_OFFSET + 0x1000u)
+#define DINODE_SIZE 0x2C8u
 
 typedef struct {
   uint8_t bytes[FILE_SIZE];
@@ -39,6 +43,19 @@ static void set_be32(uint8_t *p, uint32_t v) {
   p[3] = (uint8_t)v;
 }
 
+static void make_dirent(uint8_t *out, uint32_t inode, const char *name) {
+  size_t name_length = strlen(name);
+  put_le32(out, inode);
+  put_le32(out + 8, (uint32_t)name_length);
+  put_le32(out + 12, (uint32_t)(16u + name_length));
+  memcpy(out + 16, name, name_length);
+}
+
+static void set_dinode(uint8_t *out, uint64_t size, uint32_t first_block) {
+  put_le64(out + 8, size);
+  put_le32(out + 0x64 + 32, first_block);
+}
+
 static void valid_envelope(memory_pkg_t *pkg) {
   memset(pkg, 0, sizeof(*pkg));
   uint8_t *fih = pkg->bytes;
@@ -47,13 +64,26 @@ static void valid_envelope(memory_pkg_t *pkg) {
   fih[6] = 3;
   put_le32(fih + 0x60, OUTER_BLOCK);
   put_le64(fih + 0x10, OUTER_BLOCK);
-  put_le64(fih + 0x18, OUTER_BLOCK);
+  put_le64(fih + 0x18, PFS_SIZE);
   put_le64(fih + 0x20, OUTER_BLOCK);
   put_le64(fih + 0x58, CNT_OFFSET);
   set_be32(pkg->bytes + CNT_OFFSET, 0x7F434E54u);
   put_le64(pkg->bytes + OUTER_BLOCK, 2);
   put_le64(pkg->bytes + OUTER_BLOCK + 8, 20130315u);
   memcpy(pkg->bytes + OUTER_BLOCK + 0x370, "PPRPLAIN-NOAUTH!", 16);
+  put_le64(pkg->bytes + OUTER_BLOCK + 0x30, 4);
+  put_le32(pkg->bytes + OUTER_BLOCK + 0xD8, 1);
+
+  uint8_t *inodes = pkg->bytes + 2u * OUTER_BLOCK;
+  set_dinode(inodes + 0u * DINODE_SIZE, 21, 2);
+  set_dinode(inodes + 1u * DINODE_SIZE, 64, 3);
+  set_dinode(inodes + 2u * DINODE_SIZE, 1, 4);
+  set_dinode(inodes + 3u * DINODE_SIZE, 1, 5);
+
+  make_dirent(pkg->bytes + 3u * OUTER_BLOCK, 1, "uroot");
+  uint8_t *uroot = pkg->bytes + 4u * OUTER_BLOCK;
+  make_dirent(uroot, 2, "pfs_image.dat");
+  make_dirent(uroot + 29, 3, "naps_pkg_layout.dat");
 }
 
 static sm_pkg_info_t metadata(void) {
@@ -85,6 +115,14 @@ int main(void) {
                               &pkg, &info) == SM_FPKG_UNSUPPORTED);
   valid_envelope(&pkg);
   put_le64(pkg.bytes + 0x18, UINT64_MAX);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  put_le64(pkg.bytes + OUTER_BLOCK + 0x30, UINT64_MAX);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  pkg.bytes[3u * OUTER_BLOCK + 16u] = 'x';
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_CORRUPT);
 
