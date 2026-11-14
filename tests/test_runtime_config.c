@@ -178,6 +178,27 @@ static void put_file(const char *path, const char *text) {
   assert(f && fputs(text, f) >= 0 && fclose(f) == 0);
 }
 
+static void test_fpkg_direct_mount_config(void) {
+  put_file(CONFIG_FILE, "[config]\nversion=2\n");
+  assert(load_runtime_config());
+  assert(!sm_config_fpkg_direct_mount_enabled());
+
+  put_file(CONFIG_FILE,
+           "[config]\nversion=2\n[fpkg]\ndirect_mount=on\n");
+  assert(load_runtime_config());
+  assert(sm_config_fpkg_direct_mount_enabled());
+
+  put_file(CONFIG_FILE,
+           "[config]\nversion=2\n[fpkg]\ndirect_mount=invalid\n");
+  assert(!load_runtime_config());
+  assert(sm_config_fpkg_direct_mount_enabled());
+
+  put_file(CONFIG_FILE,
+           "[config]\nversion=2\n[fpkg]\ndirect_mount=off\n");
+  assert(load_runtime_config());
+  assert(!sm_config_fpkg_direct_mount_enabled());
+}
+
 static char *get_file(const char *path) {
   char *data = NULL;
   size_t size = 0;
@@ -380,6 +401,7 @@ int main(void) {
   test_editing();
   test_concurrent_writers();
   test_logging_flags();
+  test_fpkg_direct_mount_config();
   write_config(1);
   assert(load_runtime_config());
   runtime_config_t retained = runtime_config();

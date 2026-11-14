@@ -38,6 +38,7 @@ runtime_config_t runtime_config(void);
 bool sm_config_debug_enabled(void);
 bool sm_config_quiet_mode(void);
 bool sm_config_library_sync_notification(void);
+bool sm_config_fpkg_direct_mount_enabled(void);
 // Return the number of configured scan roots.
 int get_scan_path_count(void);
 // Copy a scan root; return false and an empty path if the index is invalid.

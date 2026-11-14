@@ -245,6 +245,7 @@ Most common options are available through the web interface. For complete accept
 | `[scan]` | `path`, `depth`, `interval_seconds` | Library discovery |
 | `[mount]` | `mode`, `persistent_images`, `exfat_backend`, `ufs_backend` | Default image-mount behavior |
 | `[library]` | `install_all`, `remove_missing`, `remove_delay_seconds` | Registration and missing-title cleanup |
+| `[fpkg]` | `direct_mount` | Reserved disabled-by-default gate; direct-mount routing is not active yet |
 | `[fakelib]` | `enabled`, `default_mode`, `global_enabled`, `global_path` | Fakelib overlays |
 | `[emulators]` | `update_enabled`, `path`, `auto_update_ampr` | Optional emulator-library updates |
 | `[fan]` | `target_temperature` | Optional fan target adjustment |

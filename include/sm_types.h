@@ -148,6 +148,9 @@ typedef struct runtime_config {
   bool force_mount;
   bool persistent_image_mounts;
   bool app_install_all_enabled;
+  // Experimental direct debug-FPKG route; defaults off until cache/lifecycle
+  // ownership has been validated by the native backend.
+  bool fpkg_direct_mount_enabled;
   bool auto_remove_missing_games;
   bool auto_remove_games_with_dlc;
   bool backport_fakelib_enabled;
