@@ -8,7 +8,9 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 - Python: 3.14.3.
 - PS5 SDK: unavailable; `/opt/ps5-payload-sdk` does not exist.
 - Docker: unavailable.
-- Test FPKG: not supplied. No game-derived fixture was created or copied.
+- Test FPKG: the user supplied a local 2,430,510,116-byte plaintext debug
+  package for `PPSA12544`. It was opened read-only from Downloads; no package
+  data was copied into the repository or extracted to disk.
 - PS5 console: unavailable in this task environment.
 - Linux CI: not run. Upstream GitHub permission is read-only; local commits cannot
   trigger the repository's workflow. The existing Ubuntu PS5 workflow now has a
@@ -32,6 +34,8 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | `python3 tools/test_fpkg_decoder_reference.py /private/tmp/kraken-mount-reference` | PASS | The pinned Kraken reader at `4b420d579bd381796d773875e36d14c9acaabf39` independently decoded matching synthetic literal, delta, match and Huffman vectors. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_tree.c src/sm_fpkg_tree.c -o /tmp/sm-fpkg-tree-test && /tmp/sm-fpkg-tree-test` | PASS (focused safety test) | Synthetic inner PFS tree bounds, UTF-8/path traversal rejection, inode-count cap and directory-cycle rejection passed under ASan/UBSan. |
 | `mkdir -p /tmp/sm-fpkg-ampr-oracle && clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude tests/fpkg_ampr_oracle/generate.c src/sm_fpkg_index.c -o /tmp/fpkg-ampr-generate && /tmp/fpkg-ampr-generate /tmp/sm-fpkg-ampr-oracle && cargo run --offline --locked --manifest-path tests/fpkg_ampr_oracle/Cargo.toml -- /tmp/sm-fpkg-ampr-oracle/ampr_emu.index /tmp/sm-fpkg-ampr-oracle/ampr_assets.index /tmp/sm-fpkg-ampr-oracle/kraken.pkg` | PASS | The permanent test-only harness generated indexes with both C and pinned Kraken writers using a fixed timestamp, compared both byte-for-byte, opened the C outputs with pinned AMPR v0.4.0 readers, fetched the codec-2 chunk from the synthetic package, decoded it with AMPR's Kraken decoder, and byte-compared all 256 KiB. The AMPR source is test-only and is not included in SMP. |
+| Read-only fixture probe: temporary C harness linked `sm_pkg.c` and all FPKG modules, parsed package metadata, then called `sm_fpkg_open_stream` | EXPECTED UNSUPPORTED | SMP metadata classification accepted `PPSA12544` as a base package. The native reader returned `SM_FPKG_UNSUPPORTED` because the layout boundary table contains a sparse extent at mount offset `0x6b52db7b`. No game files were read or extracted. The temporary harness and executable are in `/private/tmp`, not the repository. |
+| Pinned reference cross-check: `CARGO_TARGET_DIR=/private/tmp/kraken-cargo cargo run --offline --locked --manifest-path /private/tmp/kraken-mount-reference/crates/kraken-mount-pkg/Cargo.toml --example ls -- '<supplied package path>'` | EXPECTED UNSUPPORTED | Kraken revision `4b420d579bd381796d773875e36d14c9acaabf39` returned `unsupported package: the layout has a sparse extent at mount 0x6b52db7b; repack with --kraken stored`. The native reader and pinned reference agree on this unsupported boundary. This is not a full-tree differential test or compatibility pass. |
 | Temporary focused layout oracle: `ps5upload_fpkg::kraken_image::describe` and the C parser consumed the same synthetic descriptor bytes | PASS | Both reported one raw block at logical/stored offset zero, length 256 KiB. The descriptor and harness remained under `/private/tmp`; this is not an FPKG fixture. |
 
 The existing suite outcomes above are macOS baseline results; the FPKG commands
@@ -40,19 +44,19 @@ source inspection.
 
 ## FPKG matrix status
 
-All T01–T38 are **NOT RUN** because implementation and fixture/PS5 requirements
-are not satisfied yet. Specifically, there are no legal debug-FPKG fixtures,
-the pinned decoder oracle covers only synthetic blocks rather than full packages,
-there is no AMPR codec-2 package readback, no SDK build, and no console. A legal
-fixture hash, package reference SHA, SMP SHA, AMPR artifact SHA, or console log
-therefore does not exist for these cases.
+All T01–T38 remain **NOT MET**. The supplied package is a real debug FPKG, but
+both the native reader and pinned Kraken reject it because of a sparse extent
+that the pinned reference MVP does not support. Therefore no supported real-
+package tree, decoder output, or AMPR readback was produced. The pinned decoder
+oracle still covers synthetic blocks only; there is no SDK build or console test.
+The package remains in Downloads and was not copied into this repository.
 
 ## Validation gates
 
 | Gate | Status |
 | --- | --- |
 | G0 repository/source/license audit | Source and license audit recorded. Baseline PS5 build is blocked by missing SDK. PR #200 is open, not merged. |
-| G1 legal-fixture differential reader tests | NOT MET; synthetic outer-to-inner reads, retained file paths, bounded file reads, CNT fallback entries, package-to-AMPR index construction and streaming extraction exist, but there is no legal FPKG fixture or full-tree differential result. |
+| G1 legal-fixture differential reader tests | NOT MET; synthetic outer-to-inner reads, retained file paths, bounded file reads, CNT fallback entries, package-to-AMPR index construction and streaming extraction exist. The supplied real package is rejected by both the C reader and pinned Kraken for the same unsupported sparse extent, so it yields no full-tree differential result. |
 | G2 decoder differential/sanitizer/fuzz gates | NOT MET; native decoder and synthetic differential vectors exist, but the legal golden corpus, malformed-stream corpus, fuzzing and worst-case CPU/memory measurements remain. |
 | G3 byte-identical indexes and runtime readback | PARTIAL; the C and pinned Kraken writers now produce byte-identical AMPRIDX3 and AMPRPAK4 output for one deterministic synthetic codec-2 file, and the pinned AMPR readers decode that package chunk. Broader manifest coverage and real-package vectors remain. |
 | G4 safe cache crash/recovery tests | Design contract recorded; implementation and failure injection not run. |

@@ -4,8 +4,9 @@ Issue: [ShadowMountPlus #221](https://github.com/drakmor/ShadowMountPlus/issues/
 
 This document records the Phase 0 audit and implementation progress as of
 2026-11-14. It separates source facts, implemented host-testable primitives,
-and remaining work. No game package or PS5 SDK is present in the host
-environment.
+and remaining work. No PS5 SDK or console is present in the host environment.
+A user-supplied plaintext FPKG was subsequently tested read-only; the exact
+result is recorded in `docs/fpkg-test-results.md`.
 
 ## Repository and reference pins
 
@@ -45,9 +46,10 @@ change. The connected GitHub account has read-only permission on upstream.
 | `src/launch.rs` | `sm_game_lifecycle.c`, `sm_fakelib.c`, mount manager and mount identity tracking | mount the FPKG parent directory into sandbox `app0/kraken` and record ownership | minimal FPKG layer in existing launch/mount owner |
 | `register.rs` / `watcher.rs` | appdb registration and game lifecycle/scanner | source-kind persistence and launch routing | extend existing SMP records only after cache validation |
 
-The proposed C module names are placeholders until local conventions and ownership
-are confirmed in implementation. They are not permission to duplicate existing
-SMP owners.
+The proposed C module names were refined during implementation. The native reader
+and index writer are implemented as `src/sm_fpkg*.c`; cache, scanner, registration
+and launch integration remain with their existing SMP owners and are not yet
+implemented.
 
 ## Current SMP call path
 
