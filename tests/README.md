@@ -46,6 +46,7 @@ ownership-aware cleanup and quarantine:
 
 ```sh
 clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
+  -include tests/host_platform.h \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   tests/test_fpkg_cache.c src/sm_fpkg_cache.c -o /tmp/sm-fpkg-cache-test
 /tmp/sm-fpkg-cache-test
