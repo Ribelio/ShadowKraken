@@ -111,8 +111,10 @@ jobs:
           python3 tools/test_fpkg_decoder_reference.py \
             kraken-mount-reference
           mkdir -p /tmp/fpkg-ampr-oracle
-          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             tests/fpkg_ampr_oracle/generate.c src/sm_fpkg_index.c \
+            src/sm_fpkg.c src/sm_fpkg_layout.c src/sm_fpkg_image.c \
+            src/sm_fpkg_decoder.c src/sm_fpkg_tree.c \
             -o /tmp/fpkg-ampr-generate
           /tmp/fpkg-ampr-generate /tmp/fpkg-ampr-oracle
           CARGO_TARGET_DIR=/tmp/fpkg-ampr-cargo cargo run --locked \
