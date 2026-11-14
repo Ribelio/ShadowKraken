@@ -39,6 +39,13 @@ jobs:
           repository: ps5-payload-dev/sdk
           path: ps5-sdk
 
+      - name: Checkout pinned AMPR format reader for host oracle
+        uses: actions/checkout@v4
+        with:
+          repository: quer3q/ampr-emu-ng
+          ref: 920e9172b6bf99bd9210361b545e2953659d1e9b
+          path: ampr-emu-ng-reference
+
       - name: Setup build environment
         run: |
           sudo apt update
@@ -100,6 +107,16 @@ jobs:
           git -C /tmp/kraken-mount-reference checkout --detach FETCH_HEAD
           python3 tools/test_fpkg_decoder_reference.py \
             /tmp/kraken-mount-reference
+          mkdir -p /tmp/fpkg-ampr-oracle
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+            tests/fpkg_ampr_oracle/generate.c src/sm_fpkg_index.c \
+            -o /tmp/fpkg-ampr-generate
+          /tmp/fpkg-ampr-generate /tmp/fpkg-ampr-oracle
+          CARGO_TARGET_DIR=/tmp/fpkg-ampr-cargo cargo run --locked \
+            --manifest-path tests/fpkg_ampr_oracle/Cargo.toml -- \
+            /tmp/fpkg-ampr-oracle/ampr_emu.index \
+            /tmp/fpkg-ampr-oracle/ampr_assets.index \
+            /tmp/fpkg-ampr-oracle/kraken.pkg
 
       - name: Configure pacman for locally built packages
         run: |
