@@ -1,19 +1,34 @@
 #include "host_platform.h"
 #include "sm_limits.h"
+#ifdef __APPLE__
 #include "sandbox_layer.inc"
-
+#define MNT_BYFSID 0x08000000
+#else
+#include "sandbox_layer.inc"
 #define MNT_BYFSID 0x08000000
 struct statfs {
   char f_mntonname[88], f_mntfromname[88], f_fstypename[16];
   fsid_t f_fsid;
 };
+#endif
+#define SANDBOX_USB_ROOT_COUNT 8u
+#define SANDBOX_EXT_ROOT_COUNT 2u
 static struct statfs mounts[2];
 static int mount_count, lookup_error, snapshot_error, unmount_error;
 static unsigned unmount_calls, removed_dirs;
-static struct { uint64_t cleanup_deadline_us; } g_fakelib_mount;
+static struct {
+  fakelib_layer_t layers[8u + SANDBOX_USB_ROOT_COUNT + SANDBOX_EXT_ROOT_COUNT];
+  size_t layer_count;
+  uint64_t cleanup_deadline_us;
+} g_fakelib_mount;
 
 static void log_debug(const char *format, ...) { (void)format; }
 static void sm_mount_diag_log_busy(const char *path) { (void)path; }
+static bool path_matches_root_or_child(const char *path, const char *root) {
+  size_t length = strlen(root);
+  return strncmp(path, root, length) == 0 &&
+         (path[length] == '\0' || path[length] == '/');
+}
 static int sm_mount_table_snapshot(struct statfs **out) {
   if (snapshot_error) { errno = snapshot_error; return -1; }
   *out = malloc(sizeof(mounts));
@@ -21,10 +36,10 @@ static int sm_mount_table_snapshot(struct statfs **out) {
   memcpy(*out, mounts, sizeof(mounts));
   return mount_count;
 }
-static int statfs(const char *path, struct statfs *out) {
+int statfs(const char *path, struct statfs *out) {
   (void)path; (void)out; errno = lookup_error; return -1;
 }
-static int unmount(const char *path, int flags) {
+int unmount(const char *path, int flags) {
   assert(flags == MNT_BYFSID && !strcmp(path, "FSID:11:22"));
   ++unmount_calls;
   if (unmount_error) { errno = unmount_error; return -1; }
@@ -44,7 +59,7 @@ static fakelib_layer_t reset_layer(const char *source, bool overlay) {
   snapshot_error = unmount_error = 0;
   unmount_calls = removed_dirs = 0;
   fakelib_layer_t layer = {.owned_mount = true, .mount_identity_valid = true,
-                           .created_mount_path = true};
+                           .created_mount_path = true, .overlay = overlay};
   layer.label = overlay ? "game" : "directory";
   strlcpy(layer.source_path, source, sizeof(layer.source_path));
   strlcpy(layer.mount_path, "/mnt/sandbox/PPSA12345_000/data", sizeof(layer.mount_path));
@@ -75,6 +90,27 @@ int main(void) {
   strlcpy(mounts[0].f_mntfromname, "/user/data", sizeof(mounts[0].f_mntfromname));
   assert(unmount_sandbox_layer(&layer) && unmount_calls == 1);
 
+  layer = reset_layer("/mnt/usb0/games", false);
+  layer.label = "fpkg";
+  assert(unmount_sandbox_layer(&layer) && unmount_calls == 1);
+
+  layer = reset_layer("/mnt/usb0/games", false);
+  layer.label = "fpkg";
+  g_fakelib_mount.layers[0] = layer;
+  g_fakelib_mount.layer_count = 1;
+  assert(remove_fpkg_sandbox_layers_for_root("/mnt/usb0", false));
+  assert(g_fakelib_mount.layer_count == 0 && unmount_calls == 1);
+
+  layer = reset_layer("/mnt/usb0/games", false);
+  layer.label = "fpkg";
+  layer.owned_mount = false;
+  g_fakelib_mount.layers[0] = layer;
+  g_fakelib_mount.layer_count = 1;
+  errno = 0;
+  assert(!remove_fpkg_sandbox_layers_for_root("/mnt/usb0", false));
+  assert(errno == EBUSY && g_fakelib_mount.layer_count == 1 &&
+         unmount_calls == 0);
+
   layer = reset_layer("/data", false);
   memset(&mounts[0].f_fsid, 0, sizeof(mounts[0].f_fsid));
   assert(unmount_sandbox_layer(&layer) && !unmount_calls && !removed_dirs);
@@ -100,6 +136,6 @@ int main(void) {
   layer = reset_layer("/data", false);
   layer.owned_mount = false;
   assert(unmount_sandbox_layer(&layer) && !unmount_calls);
-  puts("Sandbox cleanup: stale data/overlay identities recover; overmounts, borrowed layers and real failures remain protected");
+  puts("Sandbox cleanup: stale identities recover; FPKG nullfs cleanup is ownership-aware, and borrowed layers, overmounts and real failures remain protected");
   return 0;
 }

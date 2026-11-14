@@ -123,6 +123,16 @@ jobs:
             /tmp/fpkg-ampr-oracle/ampr_assets.index \
             /tmp/fpkg-ampr-oracle/kraken.pkg
 
+      - name: Run FPKG cache and lifecycle host checks
+        run: |
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/test_fpkg_cache.c src/sm_fpkg_cache.c \
+            -o /tmp/sm-fpkg-cache-test
+          /tmp/sm-fpkg-cache-test
+          python3 tools/test_scan_permissions.py
+          python3 tools/test_sandbox_cleanup.py
+
       - name: Configure pacman for locally built packages
         run: |
           sudo install -d -m 755 /var/lib/pacman/local /var/cache/pacman/pkg

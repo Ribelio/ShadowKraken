@@ -99,6 +99,9 @@ typedef struct scan_candidate {
   bool installed;
   bool in_app_db;
   bool manual;
+  // The path is a plaintext FPKG source until the install worker publishes its
+  // transactional cache generation, then it is replaced with that directory.
+  bool fpkg;
 } scan_candidate_t;
 
 typedef enum {

@@ -26,9 +26,11 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | `make -n help` | FAIL (environment) | Make stops while including missing `/opt/ps5-payload-sdk/toolchain/prospero.mk`. No source compilation occurs. |
 | `python3 tools/test_runtime_config.py --sanitize` | FAIL (platform) | macOS `struct stat` lacks Linux `st_mtim`/`st_ctim` names used by the existing implementation/test, and macOS headers do not expose `pthread_barrier_t` under this test's flags. |
 | `python3 tools/test_shellcore.py --sanitize` | PARTIAL/FAIL (platform) | ptrace unit portion passed; remaining test assembly uses x86-64 GNU syntax and cannot assemble for this arm64 macOS host. |
-| `python3 tools/test_scan_permissions.py` | FAIL (platform) | Existing `tests/host_platform.h` redefines macOS `strlcpy` under `-Werror`. |
+| `python3 tools/test_scan_permissions.py` | PASS (targeted) | Also checks uppercase `.PKG` discovery callback stays disabled until `fpkg_direct_mount` is enabled. Host shim now overrides the macOS `strlcpy` macro portably. |
 | `python3 tools/test_shellcore_launch.py --sanitize` | PASS | `Launch ownership: abandoned switch recovery, retry identity, fallback, live owner and mutation guards passed`. |
-| `python3 tools/test_sandbox_cleanup.py` | FAIL (platform) | Existing host shim redefines macOS `strlcpy`; macOS headers also lack the expected `fsid_t` declaration with current flags. |
+| `python3 tools/test_sandbox_cleanup.py` | PASS (targeted) | Checks owned nullfs/unionfs cleanup, stale identities, overmount and borrowed-layer protection, real failures, `fpkg`-labelled nullfs cleanup, and refusal to detach a borrowed FPKG layer during media removal. |
+| Targeted cache harness: `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-macro-redefined -Dst_mtim=st_mtimespec -Dst_ctim=st_ctimespec -Iinclude -Isrc -Itests -include tests/host_platform.h -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_cache.c src/sm_fpkg_cache.c -o /private/tmp/sm-fpkg-cache-test && /private/tmp/sm-fpkg-cache-test` | PASS (targeted) | Synthetic active generation, source identity, symlinked active pointer, interrupted stage, orphaned generation, quarantine report, active-generation cleanup refusal, foreign-file refusal and ownership-aware quarantine/removal passed under ASan/UBSan. |
+| Targeted syntax checks: `clang -std=gnu11 -Wall -Wextra -Werror -Wno-macro-redefined ... -fsyntax-only src/sm_scan.c src/sm_scan_tree.c src/sm_install.c src/sm_shellcore_service.c src/sm_fakelib.c` with the macOS host shim and Darwin stat-time aliases | PASS (targeted) | Changed scanner, install, runtime and Fakelib translation units pass host syntax checking with declarations for PS5 SDK calls supplied by the test shim. This does not validate PS5 ABI or behavior. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-header-test && /tmp/sm-fpkg-header-test` | PASS (focused safety test) | Synthetic FIH/PFS eligibility, bounded CNT table and payload extents, outer direct/indirect maps, mapped descriptor parse, three-block image reads, retained file enumeration and `eboot.bin` range read, package block mapping for aligned inner and CNT files, unaligned-block rejection, package-to-AMPR index construction for packed and caller-selected extracted files, streaming extraction success and cancellation rollback, CNT `icon0.png` fallback enumeration/read, and inner tree validation pass under ASan/UBSan. This is not a game or real-package compatibility fixture. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_index.c src/sm_fpkg_index.c src/sm_fpkg.c src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c -o /tmp/sm-fpkg-index-test && /tmp/sm-fpkg-index-test` | PASS (focused safety test) | Synthetic AMPRIDX3/AMPRPAK4 layout, RAW and codec-2 descriptors, CRCs, duplicate/case-folded paths, traversal, invalid UTF-8 and package-bound checks passed under ASan/UBSan. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_layout.c src/sm_fpkg_layout.c -o /private/tmp/sm-fpkg-layout-overlap-test && /private/tmp/sm-fpkg-layout-overlap-test` | PASS (focused safety test) | Synthetic raw 256 KiB Kraken descriptor, a legal 62-byte stored-range overlap, resource bounds, compression/shuffle rejection, sparse rejection and short input passed under ASan/UBSan. |
@@ -67,7 +69,7 @@ not copied into this repository.
 | G1 legal-fixture differential reader tests | PARTIAL; synthetic outer-to-inner reads, retained file paths, bounded file reads, CNT fallback entries, package-to-AMPR index construction and streaming extraction exist. The `PPSA21703` tree matches pinned Kraken across all 1,336 entries, and its `eboot.bin` and `param.json` readbacks match by SHA-256. The broader legal fixture corpus remains. `PPSA12544` remains unsupported by both readers due to its sparse extent. |
 | G2 decoder differential/sanitizer/fuzz gates | PARTIAL; native decoder and synthetic differential vectors pass, including an escaped-length regression under ASan/UBSan. One real metadata block and two real file readbacks match pinned Rust. The broader legal golden corpus, malformed-stream corpus, fuzzing and worst-case CPU/memory measurements remain. |
 | G3 byte-identical indexes and runtime readback | PARTIAL; the C and pinned Kraken writers now produce byte-identical AMPRIDX3 and AMPRPAK4 output for one deterministic synthetic codec-2 file, and the pinned AMPR readers decode that package chunk. Broader manifest coverage and real-package vectors remain. |
-| G4 safe cache crash/recovery tests | Design contract recorded; implementation and failure injection not run. |
+| G4 safe cache crash/recovery tests | PARTIAL; synthetic recovery, symlink rejection, staging/orphan/quarantine reporting, active-generation refusal and ownership-manifest cleanup pass. Power-loss injection during a real FPKG build is not available in the host fixture. |
 | G5 PS5 launch/mount lifecycle | PS5-only; NOT RUN. |
 | G6 Linux CI and release build | NOT RUN; requires a push-capable fork/PR and CI. |
 
@@ -75,12 +77,14 @@ Host-verified functionality includes the bounded FIH/PFS/CNT and outer metadata
 reader through descriptor mapping and parsing, retained inner-tree paths and
 bounded file reads (including the three reference CNT fallback paths), package
 block mapping, package-to-AMPR index construction and a callback-based streaming
-extraction path against synthetic fixtures, exact path/type/size tree matching
-for a real `PPSA21703` package, byte-identical streaming readback of its
-`eboot.bin` and `sce_sys/param.json`, one byte-identical real metadata block decode,
-the standalone Kraken descriptor parser against a synthetic descriptor also
-accepted by ps5-dump-forge, byte comparison of writer output against pinned
-Kraken and AMPR codec-2 readback, and the native Kraken decoder against
-synthetic reference vectors. No filesystem cache sink, transaction/recovery,
-registration, scanner, or launch integration is claimed as implemented or
-verified by this record.
+extraction path against synthetic fixtures, cache recovery/cleanup fixtures,
+opt-in scanner callback behavior, the sandbox layer ownership tests, exact
+path/type/size tree matching for the historical read-only `PPSA21703` fixture,
+byte-identical streaming readback of its `eboot.bin` and `sce_sys/param.json`,
+one byte-identical real metadata block decode, the standalone Kraken descriptor
+parser against a synthetic descriptor also accepted by ps5-dump-forge, byte
+comparison of writer output against pinned Kraken and AMPR codec-2 readback, and
+the native Kraken decoder against synthetic reference vectors. Host syntax
+checks cover the changed scanner, install, runtime and Fakelib translation
+units. Cache generation against a full FPKG, AppInstallTitleDir registration,
+the PS5 `/app0/kraken` mount and game launch remain unverified on console.

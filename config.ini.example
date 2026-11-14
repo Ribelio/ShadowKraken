@@ -63,8 +63,8 @@ version = 2
 # remove_delay_seconds = 300
 
 [fpkg]
-# Reserved gate for the native plaintext debug-FPKG route. It has no effect
-# until cache publication and lifecycle integration are implemented.
+# Enables scanning and lifecycle integration for supported plaintext debug FPKG.
+# Disabled by default; platform registration and launch checks remain in force.
 # direct_mount = off
 
 [fakelib]

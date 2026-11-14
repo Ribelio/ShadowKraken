@@ -25,50 +25,62 @@ Kraken daemon or proprietary game data is part of the planned SMP implementation
 
 PR #200 (`quer3q/ShadowMountPlus`, head `3663a32e56130c722ee0aa77623be5f19d5674ee`)
 is still open against `1.7`, not part of the inspected SMP baseline. It proposes
-recognizing/updating AMPR NG in fakelib and must be reconciled before runtime
-integration. PR #206 is also open against `1.7` (head
+recognizing/updating AMPR NG in fakelib; SMP's current fakelib path is reused,
+but the PS5-side AMPR NG selection still needs console verification. PR #206 is
+also open against `1.7` (head
 `3596e602f7c1c89faff53d55215fc02e89a48703`); it changes same-title process
 handoff to reuse a prepared/mounted runtime before binding the replacement
 process. That lifecycle ownership behavior must be reconciled before adding a
-new launch layer. PR #215 was closed unmerged and is an unrelated Trail/docs
-change. The connected GitHub account has read-only permission on upstream.
+process. Same-title handoff behavior differs from this baseline and may affect
+when an FPKG layer is reused. This branch reuses SMP's existing layer owner
+rather than adding a second session; same-title handoff still needs PS5
+lifecycle validation.
+PR #215 was closed unmerged and is an unrelated Trail/docs change. The
+connected GitHub account has read-only permission on upstream.
 
 ## Kraken function map
 
-| Kraken function/file | SMP existing equivalent | Missing function | Proposed native module |
+| Kraken component | SMP implementation | Behavior carried over | Remaining boundary |
 | --- | --- | --- | --- |
-| `crates/kraken-mount-pkg/src/pkg.rs`: FIH/CNT inspection and package open | `sm_pkg_parse_stream` / `sm_pkg_parse_file` in `src/sm_pkg.c` parse package metadata and classify installable content | A separate eligibility decision for full, plaintext PS5 debug FPKG without changing installer classification | `src/sm_fpkg.c`, `include/sm_fpkg.h` |
-| `outer.rs`: PFS geometry, superblock, dinodes, direct/indirect extents | no reader of package outer PFS | Bounded outer filesystem reader and integrity/alias policy | `src/sm_fpkg_outer.c` (or private section of `sm_fpkg.c`) |
-| `tree.rs`: inner PFS entries and paths | scanner handles folders and recognized disk images, not FPKG inner trees | Retain validated file paths and expose bounded file reads to a later extraction planner | `src/sm_fpkg_tree.c`, `src/sm_fpkg_image.c`, `include/sm_fpkg.h` |
-| `kraken.rs`, `decoder/{mod,huff,lz,timing}.rs` | none | Kraken block mapping and decoder | `src/sm_fpkg_layout.c`, `src/sm_fpkg_decoder.c` |
-| `src/ampr_index.rs` | SMP has AMPR update/fakelib support but no AMPR index writer | exact AMPRIDX3 and AMPRPAK4 writer for codec 2 | `src/sm_fpkg_index.c` |
-| `src/cache.rs` | `sm_game_cache.c`, scanner/install queue and SMP state own related caches | FPKG extraction/index cache with owned-file journal; never clear ambiguous cache | extend existing cache owner after design review; no parallel cache daemon |
-| `src/launch.rs` | `sm_game_lifecycle.c`, `sm_fakelib.c`, mount manager and mount identity tracking | mount the FPKG parent directory into sandbox `app0/kraken` and record ownership | minimal FPKG layer in existing launch/mount owner |
-| `register.rs` / `watcher.rs` | appdb registration and game lifecycle/scanner | source-kind persistence and launch routing | extend existing SMP records only after cache validation |
+| `crates/kraken-mount-pkg/src/pkg.rs`: FIH/CNT and package open | `sm_pkg.c`, `sm_fpkg.c` | Reuse SMP PKG metadata, then accept supported plaintext debug-FPKG layouts | Unsupported/encrypted layouts fail closed; no crypto or platform validation is bypassed |
+| `outer.rs`: PFS geometry and extents | `sm_fpkg.c`, `sm_fpkg_tree.c` | Bounded outer maps and inner tree access | Bounds/unsupported geometry can differ from Kraken error classification |
+| `tree.rs`: inner PFS entries and paths | `sm_fpkg_tree.c`, `sm_fpkg_image.c` | Retain validated paths, bounded reads and block mapping | Non-contiguous or unaligned AMPR mappings are rejected |
+| `kraken.rs`, `decoder/{mod,huff,lz,timing}.rs` | `sm_fpkg_layout.c`, `sm_fpkg_decoder.c` | Kraken block mapping and decompression | Platform-specific runtime performance remains unmeasured |
+| `src/ampr_index.rs` | `sm_fpkg_index.c` | AMPRIDX3 and AMPRPAK4 codec-2 generation | Host byte-oracle coverage is synthetic and partial |
+| `src/cache.rs` | `sm_fpkg_cache.c` | Extract required loose files, generate indexes and publish cache | SMP adds immutable generations and ownership-checked cleanup for crash safety |
+| `src/launch.rs` | existing `sm_fakelib.c` layer owner | Mount package parent read-only at sandbox `app0/kraken` | SMP uses its FSID-owned lifecycle cleanup instead of Kraken's standalone session |
+| `register.rs` / `watcher.rs` | `sm_scan.c`, `sm_install.c`, `mount.lnk`, appdb bridge | Scan, publish, register and launch through the normal SMP lifecycle | Actual platform registration and loader acceptance require PS5 validation |
 
-The proposed C module names were refined during implementation. The native reader
-and index writer are implemented as `src/sm_fpkg*.c`; cache, scanner, registration
-and launch integration remain with their existing SMP owners and are not yet
-implemented.
+The native C reader, decoder, index writer, transactional cache, scanner path,
+registration path and launch-owned sandbox layer are implemented in this branch.
+The scanner creates candidates only when `fpkg_direct_mount` is enabled and the
+existing PKG parser classifies a confident base package; the native reader then
+rejects unsupported/non-plaintext layouts. The install worker publishes a
+verified generation before passing its directory through SMP's existing
+`mount_title_nullfs` → `mount.lnk` → `AppInstallTitleDir` path. At sandbox-ready,
+SMP validates the generation/source snapshot, then tracks a read-only nullfs of
+the original package parent at sandbox `/app0/kraken`, matching KrakenMount's
+`kraken.image` resolution. Existing lifecycle cleanup owns this layer by mount
+identity. The feature remains disabled by default.
 
 ## Current SMP call path
 
 ```mermaid
 flowchart LR
-  A[sm_scanner / sm_scan] --> B[stable source and directory/image discovery]
-  B --> C[sm_pkg metadata parser and scan candidate]
-  C --> D[install queue / appdb registration]
-  D --> E[title state and cache]
-  E --> F[game lifecycle event and title owner]
-  F --> G[sandbox identity and readiness]
-  G --> H[owned mount layers / fakelib / backport]
-  H --> I[game exit, switch, sleep or shutdown cleanup]
+  A[sm_scanner / sm_scan] --> B[stable .pkg discovery and PKG metadata]
+  B --> C[plaintext FPKG reader and transactional cache generation]
+  C --> D[normal install mount and mount.lnk]
+  D --> E[existing AppInstallTitleDir or batch registration]
+  E --> F[normal SMP launch hook and title owner]
+  F --> G[AMPR fakelib plus tracked /app0/kraken nullfs]
+  G --> H[game exit, switch, media removal, sleep or shutdown cleanup]
 ```
 
-FPKG support must branch after existing PKG metadata parsing and retain its
-source snapshot. It must not enter the existing package installer queue. Cache
-publication precedes registration. Launch and unmount remain owned by SMP's
-existing title lifecycle and mount-state mechanisms.
+FPKG candidates use the existing package metadata parser, then the native reader
+and transactional cache. They flow through the same normal install worker and
+registration path as directory-backed titles. The launch hook validates the
+published generation and mounts the original package parent where AMPR NG
+expects it. SMP lifecycle and mount-state code retain ownership through cleanup.
 
 ## AMPR compatibility matrix (reference source inspected)
 
@@ -77,7 +89,7 @@ existing title lifecycle and mount-state mechanisms.
 | Plain folder | Existing SMP source/mount path | Existing SMP fakelib behavior; PR #200 proposes NG-specific handling | Not console-verified here | Preserve |
 | ZSTD folder | Existing AMPR NG detects `ampr_zstd.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
 | LZ4 folder (`AMPRPAK4`) | Existing AMPR NG detects `ampr_assets.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
-| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | Requires compatible AMPR NG in game fakelib | Source confirms code path; SMP launch is unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent directory |
+| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | SMP composes the package's extracted `fakelib/` or `fakelib2/` using its existing fakelib cache | Host cache/index checks pass; PS5 AMPR selection and launch remain unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent read-only |
 
 The v0.4.0 source was inspected at commit
 `920e9172b6bf99bd9210361b545e2953659d1e9b`. Its `crates/ampr-pkg/src/manifest.rs`
@@ -91,13 +103,13 @@ format target, not acceptance of a future C writer or a console launch result.
 
 | Operation | Existing owner / guard | FPKG-specific requirement |
 | --- | --- | --- |
-| Scan roots, source stability, removable media | `sm_scanner`, `sm_scan`, stability and storage/mount state | Reuse the same stable snapshot; detect replacement before commit. |
-| PKG metadata/classification | `sm_pkg.c` | Keep one metadata parser; add a distinct full-debug-FPKG eligibility result. |
-| Duplicate title resolution and appdb registration | scanner, install queue, appdb | Refuse collisions and preserve prior registration until publication validates. |
-| Game launch, sandbox readiness and game switching | lifecycle worker and title/mount state; `runtime_mount_state_lock` in `main.c` protects runtime mount state | Require one unambiguous sandbox and keep a per-session mount identity/source record. |
-| Fakelib, AMPR and backports | `sm_fakelib.c`, config and existing mount stack | Reconcile PR #200; preserve precedence and never replace a selected user runtime silently. |
-| Cache creation and cleanup | existing game cache / install machinery | Add per-title exclusion under lifecycle ownership; do not mutate while active or ambiguous. |
-| Elevated mount/appdb calls | PS5 SDK / kernel-backed SMP abstractions | Validate and stage all source-derived data before invoking them. |
+| Scan roots, source stability, removable media | `sm_scanner`, `sm_scan`, `sm_scan_tree` | Implemented: opt-in `.pkg` discovery, stable open, metadata and FPKG validation, existing duplicate/protected-title rules. |
+| PKG metadata/classification | `sm_pkg.c`, `sm_fpkg.c` | Implemented: one PKG metadata parser, then a plaintext layout reader; no decryptor or security bypass was added. |
+| Cache creation and recovery | `sm_fpkg_cache.c` | Implemented: per-title lock, immutable owned generations, source snapshot, journal, active-pointer publication, recovery inspection, quarantine and ownership-checked cleanup. |
+| Registration and title state | `sm_install.c`, `mount.lnk`, appdb bridge | Implemented through existing SMP path after a generation is validated. Actual console return codes remain PS5-only. |
+| Game launch, sandbox readiness and switching | lifecycle worker, `sm_shellcore_service.c`, `sm_fakelib.c` | Implemented: revalidate source at runtime preparation and track read-only `/app0/kraken` nullfs in the existing owner. Console mount permissions and launch acceptance remain PS5-only. |
+| Fakelib and package data | `sm_fpkg_cache.c`, `sm_fakelib.c` | Implemented: stage package `fakelib/` and `fakelib2/` loose, omit them from AMPR package data index, and do not mutate immutable generations. Compatible AMPR NG presence/selection remains runtime-dependent. |
+| Elevated mount/appdb calls | PS5 SDK and existing SMP abstractions | Reused without changing platform security checks. Host cannot establish how a particular console firmware accepts or rejects a package. |
 
 Inputs crossing trust boundaries include package bytes, package path components,
 scan/API/UI requests, cache state files, removable media and mount-table
@@ -136,47 +148,46 @@ is absent. Host tools are Apple Clang 21 and Python 3.14. Docker is unavailable.
 The existing host test scripts were run on macOS; outcomes and their platform
 blockers are in [fpkg-test-results.md](fpkg-test-results.md).
 
-Planned implementation areas, gated in order:
+The bounded reader validates FIH/CNT and plaintext outer-PFS metadata, direct and
+indirect maps, the Kraken layout descriptor and the bounded inner tree. It
+supports file reads and block mapping, then builds AMPRIDX3 and AMPRPAK4 codec-2
+records. The transactional cache selects required loose files (`eboot*.bin`,
+`sce_sys/**`, `*.prx`, `*.sprx`, and package fakelib trees), writes owned
+metadata and indexes into an immutable generation, checks the source snapshot,
+and atomically changes the per-title active pointer. Recovery does not delete
+uncertain state; cleanup validates the ownership manifest, serializes with
+title lifecycle state, quarantines first, then removes only owned entries.
 
-1. `src/sm_fpkg*.c`, `include/sm_fpkg*.h`, host-only FPKG tests and attribution:
-   bounded reader/parser/decoder. The implemented probe validates the FIH
-   header, bounded CNT entry table, plaintext outer-PFS metadata entries, and
-   their direct/indirect block maps. It reads the mapped
-   `naps_pkg_layout.dat` into bounded memory and passes it to a standalone
-   Kraken layout parser, implemented with a 384 MiB descriptor cap, 4,194,304
-   block/boundary cap,
-   sparse/shuffle rejection and stored-range overlap checks. The outer metadata
-   file-map cap is 4,194,304 64 KiB blocks (256 GiB per file). The descriptor
-   is checked against the declared `pfs_image.dat` size. The reader decodes the
-   inner image on demand and validates its superblock, inode table and bounded
-   directory tree into a bounded in-memory entry list. Its opaque public handle
-   enumerates validated paths and supports range reads from files, including the
-   three reference CNT fallbacks (`icon0.png`, `icon0.dds`, and `param.json`). It
-   can also map block-aligned file ranges to contiguous package offsets for AMPR
-   codec-2 records, and rejects unaligned or discontiguous ranges. The AMPR
-   writer can now build indexes from an opened package, with a caller-supplied
-   selection of files that will be staged loose. A bounded streaming extraction
-   API feeds a caller-owned staging sink and requests rollback on read/write
-   failure or cancellation. SMP's filesystem cache does not yet provide this
-   sink or publish the generated indexes. The native decoder
-   handles raw blocks, literal and match LZ commands, delta literals and
-   Huffman-coded arrays; differential coverage currently uses synthetic vectors
-   only. Do not duplicate `sm_pkg` metadata handling.
-2. `src/sm_fpkg_index.c` now builds AMPRIDX3 and AMPRPAK4, including codec-2
-   records. A test-only harness byte-compares both generated indexes against the
-   pinned Kraken writer with a fixed timestamp, then uses the pinned AMPR v0.4.0
-   readers to read and decode a codec-2 chunk from a synthetic package. Broader
-   record coverage remains. Reference Rust code is test-only; SMP has no Rust
-   dependency.
-3. Existing cache owner, with transaction journal, source fingerprint and disabled
-   configuration key in `sm_config_mount.c`, config file/API surfaces as needed.
-4. Scanner/registration/lifecycle/mount path extensions, only after prior gates.
-5. CI, user-facing status/docs and PS5-only scenarios.
+Host checks for reader, index, cache, scanner and sandbox cleanup are listed in
+`docs/fpkg-test-results.md`. The macOS SDK cannot compile the full PS5 project:
+`/opt/ps5-payload-sdk/toolchain/prospero.mk` and PS5 kernel headers are absent.
+There is no console here. The Ubuntu workflow now runs the focused cache,
+scanner and sandbox cleanup checks before its payload build, but it could not be
+dispatched from this checkout; Linux CI and PS5 validation remain outstanding.
 
-Likely commands: `make clean all` with the SMP PS5 SDK; the existing commands in
-`tests/README.md`; host FPKG tests with `-fsanitize=address,undefined`; the pinned
-Kraken differential oracle and AMPR manifest/readback checks; then GitHub Actions
-Linux CI. This Mac has no PS5 SDK, Docker or console.
+## Remaining integration boundaries
+
+The implemented path reaches existing registration and launch calls without
+changing their authorization behavior. It does not bypass package signatures,
+licenses, encryption, PFS signature checks or platform policy. The reader only
+accepts layouts it can read as plaintext. Whether `AppInstallTitleDir` (or SMP's
+existing newer-firmware bridge), title registration, sandbox nullfs, AMPR NG and
+the PS5 loader accept a specific authorized debug package is a console question;
+no host API can establish that result. A platform rejection must be reported
+from the existing return code or mount error. Supported implementation options
+are to use an already supported firmware registration bridge, install through
+the platform's supported debug-package route and register its resulting title
+directory with SMP, or keep the package as an SMP-managed title only where the
+console's existing registration API accepts it. Adding a path that skips a
+platform check is out of scope.
+
+KrakenMount's `launch.rs` mounts the package parent read-only at sandbox
+`/app0/kraken`; SMP now does the same through its tracked Fakelib layer. The
+technical deviation is ownership: SMP records and cleans this mount through its
+existing layer/FSID session instead of KrakenMount's standalone session and
+retry loop. SMP does not force-unmount an ambiguous layer. Compatible AMPR NG is
+also required to consume these indexes; its PS5-side selection and behavior are
+not verified by host tests.
 
 ## Decision record
 

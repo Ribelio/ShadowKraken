@@ -7,12 +7,15 @@
 
 #include "sm_filesystem.h"
 #include "sm_fakelib.h"
+#include "sm_fpkg_cache.h"
+#include "sm_config_mount.h"
 #include "sm_game_lifecycle.h"
 #include "sm_gameinfo.h"
 #include "sm_image.h"
 #include "sm_limits.h"
 #include "sm_log.h"
 #include "sm_path_utils.h"
+#include "sm_paths.h"
 #include "sm_pkg_backport.h"
 #include "sm_runtime.h"
 #include "sm_scan.h"
@@ -446,6 +449,21 @@ static bool wait_for_resumed_runtime_source(const char *title_id,
 static bool prepare_title_runtime(const char *title_id,
                                   const char *source_path,
                                   const bool *mount_read_only_override) {
+  if (path_matches_root_or_child(source_path,
+                                 SM_FPKG_CACHE_DEFAULT_ROOT)) {
+    if (!sm_config_fpkg_direct_mount_enabled()) {
+      errno = ENOTSUP;
+      return false;
+    }
+    sm_fpkg_cache_generation_info_t generation_info;
+    if (sm_fpkg_cache_read_generation_info(
+            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path,
+            &generation_info) != SM_FPKG_OK ||
+        !generation_info.source_matches_snapshot) {
+      errno = ESTALE;
+      return false;
+    }
+  }
   if (!prepare_image_source(title_id, source_path,
                             mount_read_only_override))
     return false;
@@ -1042,6 +1060,15 @@ bool sm_shellcore_source_is_protected(const char *path) {
     }
     if (paths_overlap(path, runtime_path))
       return true;
+    if (path_matches_root_or_child(runtime_path,
+                                   SM_FPKG_CACHE_DEFAULT_ROOT)) {
+      sm_fpkg_cache_generation_info_t generation_info;
+      if (sm_fpkg_cache_read_generation_info(
+              SM_FPKG_CACHE_DEFAULT_ROOT, titles[i], runtime_path,
+              &generation_info) == SM_FPKG_OK &&
+          paths_overlap(path, generation_info.source_path))
+        return true;
+    }
     char chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
     size_t layers = 0;
     if (!read_mount_image_chain(titles[i], chain, &layers) || layers == 0) {

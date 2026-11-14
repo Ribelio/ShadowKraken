@@ -39,3 +39,16 @@ If ASan cannot initialize under WSL, prefix either Python command with
 
 The scan permission test checks inaccessible roots and descendants in watcher
 discovery while keeping content scans and real I/O failures strict.
+
+The native FPKG cache transaction fixture is a targeted host check for active
+generation validation, interrupted publication recovery, symlink rejection,
+ownership-aware cleanup and quarantine:
+
+```sh
+clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  tests/test_fpkg_cache.c src/sm_fpkg_cache.c -o /tmp/sm-fpkg-cache-test
+/tmp/sm-fpkg-cache-test
+```
+
+It uses synthetic cache records and does not open an FPKG fixture.
