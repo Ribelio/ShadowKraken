@@ -11,7 +11,7 @@
 #define PFS_SIZE (OUTER_BLOCK * OUTER_BLOCK_COUNT)
 #define PFS_END (OUTER_BLOCK + PFS_SIZE)
 #define CNT_OFFSET PFS_END
-#define FILE_SIZE (CNT_OFFSET + 0x1000u)
+#define FILE_SIZE (CNT_OFFSET + 0x2000u)
 #define DINODE_SIZE 0x2C8u
 
 typedef struct {
@@ -151,6 +151,19 @@ int main(void) {
   pkg.fail_offset = OUTER_BLOCK;
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
                               &pkg, &info) == SM_FPKG_IO);
+  valid_envelope(&pkg);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x10u, 4097);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
+  valid_envelope(&pkg);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x10u, 1);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x18u, 0x1000);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x1000u + 16u, 0x2000);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_OK);
+  set_be32(pkg.bytes + CNT_OFFSET + 0x1000u + 20u, 1);
+  assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,
+                              &pkg, &info) == SM_FPKG_CORRUPT);
   valid_envelope(&pkg);
   set_indirect_layout_file(&pkg, 21);
   assert(sm_fpkg_probe_stream("game.pkg", sizeof(pkg.bytes), memory_read,

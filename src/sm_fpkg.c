@@ -25,6 +25,8 @@
 #define SM_FPKG_DINODE_INDIRECT_COUNT 5u
 #define SM_FPKG_SIG_SIZE 36u
 #define SM_FPKG_MAX_FILE_BLOCKS (4u * 1024u * 1024u)
+#define SM_FPKG_CNT_ENTRY_SIZE 0x20u
+#define SM_FPKG_MAX_CNT_ENTRIES 4096u
 
 static uint32_t read_be32(const uint8_t *bytes) {
   return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
@@ -52,6 +54,48 @@ static bool pkg_extension(const char *name) {
     return false;
   const char *dot = strrchr(name, '.');
   return dot && strcasecmp(dot, ".pkg") == 0;
+}
+
+static sm_fpkg_status_t validate_cnt_table(sm_pkg_read_fn read, void *ctx,
+                                           uint64_t pkg_size,
+                                           uint64_t cnt_offset) {
+  uint8_t header[SM_FPKG_CNT_HEADER_SIZE];
+  if (read(ctx, cnt_offset, header, sizeof(header)) != 0)
+    return SM_FPKG_IO;
+  if (read_be32(header) != 0x7F434E54u)
+    return SM_FPKG_CORRUPT;
+  uint32_t count = read_be32(header + 0x10u);
+  uint64_t table_relative = read_be32(header + 0x18u);
+  if (count > SM_FPKG_MAX_CNT_ENTRIES)
+    return SM_FPKG_CORRUPT;
+  uint64_t table_size = (uint64_t)count * SM_FPKG_CNT_ENTRY_SIZE;
+  if (table_relative > UINT64_MAX - cnt_offset)
+    return SM_FPKG_CORRUPT;
+  uint64_t table_offset = cnt_offset + table_relative;
+  if (!range_fits(table_offset, table_size, pkg_size))
+    return SM_FPKG_CORRUPT;
+  if (table_size == 0)
+    return SM_FPKG_OK;
+  uint8_t *entries = malloc((size_t)table_size);
+  if (!entries)
+    return SM_FPKG_NOMEM;
+  if (read(ctx, table_offset, entries, (size_t)table_size) != 0) {
+    free(entries);
+    return SM_FPKG_IO;
+  }
+  sm_fpkg_status_t status = SM_FPKG_OK;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint8_t *entry = entries + (size_t)i * SM_FPKG_CNT_ENTRY_SIZE;
+    uint64_t relative = read_be32(entry + 16u);
+    uint64_t payload_size = read_be32(entry + 20u);
+    if (relative > UINT64_MAX - cnt_offset ||
+        !range_fits(cnt_offset + relative, payload_size, pkg_size)) {
+      status = SM_FPKG_CORRUPT;
+      break;
+    }
+  }
+  free(entries);
+  return status;
 }
 
 static sm_fpkg_status_t read_outer_block(sm_pkg_read_fn read, void *ctx,
@@ -331,12 +375,10 @@ sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
                   pfs_offset + pfs_size))
     return SM_FPKG_CORRUPT;
 
-  uint8_t cnt[4];
-  result = read(ctx, cnt_offset, cnt, sizeof(cnt));
-  if (result != 0)
-    return SM_FPKG_IO;
-  if (read_be32(cnt) != 0x7F434E54u)
-    return SM_FPKG_CORRUPT;
+  sm_fpkg_status_t cnt_status =
+      validate_cnt_table(read, ctx, size, cnt_offset);
+  if (cnt_status != SM_FPKG_OK)
+    return cnt_status;
 
   uint8_t superblock[SM_FPKG_SUPERBLOCK_SIZE];
   result = read(ctx, superblock_offset, superblock, sizeof(superblock));
