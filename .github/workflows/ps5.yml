@@ -66,9 +66,10 @@ jobs:
 
       - name: Run native FPKG host safety test
         run: |
-          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
+          clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
-            tests/test_fpkg_header.c src/sm_fpkg.c -o /tmp/sm-fpkg-header-test
+            tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c \
+            -o /tmp/sm-fpkg-header-test
           /tmp/sm-fpkg-header-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude \
             -fsanitize=address,undefined -fno-omit-frame-pointer \

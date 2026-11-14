@@ -4,9 +4,11 @@
  * Format behavior follows the GPL-3.0-or-later Kraken Mount reader and its
  * ps5-dump-forge format references. This probe validates the FIH/CNT envelope,
  * plaintext outer-PFS marker, required outer metadata entries and their bounded
- * block maps. It does not parse the inner tree or decode Kraken blocks.
+ * block maps, and the Kraken layout descriptor. It does not parse the inner
+ * tree or decode Kraken blocks.
  */
 #include "sm_fpkg.h"
+#include "sm_fpkg_internal.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
@@ -25,6 +27,7 @@
 #define SM_FPKG_DINODE_INDIRECT_COUNT 5u
 #define SM_FPKG_SIG_SIZE 36u
 #define SM_FPKG_MAX_FILE_BLOCKS (4u * 1024u * 1024u)
+#define SM_FPKG_MAX_LAYOUT_SIZE (384u * 1024u * 1024u)
 #define SM_FPKG_CNT_ENTRY_SIZE 0x20u
 #define SM_FPKG_MAX_CNT_ENTRIES 4096u
 
@@ -163,9 +166,18 @@ static sm_fpkg_status_t collect_indirect_blocks(
 }
 
 /* Validate complete data and indirect-table mappings without retaining them. */
-static sm_fpkg_status_t validate_file_map(
+static sm_fpkg_status_t build_file_map(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
-    const uint8_t *dinode) {
+    const uint8_t *dinode, const uint32_t *reserved_blocks,
+    size_t reserved_count, uint32_t **mapping_out, uint64_t *mapped_out,
+    uint32_t **references_out, uint64_t *reference_count_out) {
+  if (!mapping_out || !mapped_out || !references_out ||
+      !reference_count_out)
+    return SM_FPKG_CORRUPT;
+  *mapping_out = NULL;
+  *mapped_out = 0;
+  *references_out = NULL;
+  *reference_count_out = 0;
   uint64_t file_size = read_le64(dinode + 8u);
   uint64_t needed = file_size / SM_FPKG_OUTER_BLOCK_SIZE +
                     (file_size % SM_FPKG_OUTER_BLOCK_SIZE != 0);
@@ -229,16 +241,69 @@ static sm_fpkg_status_t validate_file_map(
       }
     }
   }
-  free(mapping);
-  free(references);
+  for (uint64_t i = 0; status == SM_FPKG_OK && i < reference_count; ++i) {
+    for (size_t j = 0; j < reserved_count; ++j) {
+      if (references[i] == reserved_blocks[j]) {
+        status = SM_FPKG_CORRUPT;
+        break;
+      }
+    }
+  }
   free(tables);
+  if (status == SM_FPKG_OK) {
+    *mapping_out = mapping;
+    *mapped_out = mapped;
+    *references_out = references;
+    *reference_count_out = reference_count;
+  } else {
+    free(mapping);
+    free(references);
+  }
   return status;
+}
+
+static bool reference_sets_overlap(const uint32_t *a, uint64_t a_count,
+                                  const uint32_t *b, uint64_t b_count) {
+  uint64_t i = 0, j = 0;
+  while (i < a_count && j < b_count) {
+    if (a[i] == b[j])
+      return true;
+    if (a[i] < b[j])
+      ++i;
+    else
+      ++j;
+  }
+  return false;
+}
+
+static sm_fpkg_status_t read_outer_file(
+    sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
+    const uint32_t *mapping, uint64_t mapped, uint64_t file_size,
+    uint8_t *output, uint8_t *scratch) {
+  if (!mapping || !output || !scratch)
+    return SM_FPKG_CORRUPT;
+  uint64_t remaining = file_size;
+  size_t at = 0;
+  for (uint64_t i = 0; remaining != 0 && i < mapped; ++i) {
+    sm_fpkg_status_t status = read_outer_block(
+        read, ctx, pfs_offset, block_count, mapping[i], scratch);
+    if (status != SM_FPKG_OK)
+      return status;
+    size_t take = remaining > SM_FPKG_OUTER_BLOCK_SIZE
+                      ? SM_FPKG_OUTER_BLOCK_SIZE
+                      : (size_t)remaining;
+    memcpy(output + at, scratch, take);
+    at += take;
+    remaining -= take;
+  }
+  return remaining == 0 ? SM_FPKG_OK : SM_FPKG_CORRUPT;
 }
 
 static sm_fpkg_status_t outer_child(
     sm_pkg_read_fn read, void *ctx, uint64_t pfs_offset, uint64_t block_count,
     const uint8_t *dinodes, uint64_t dinode_count, uint32_t directory_inode,
-    const char *wanted, uint32_t *inode_out, uint8_t *block) {
+    const char *wanted, uint32_t *inode_out, uint32_t *data_block_out,
+    uint8_t *block) {
   if ((uint64_t)directory_inode >= dinode_count)
     return SM_FPKG_CORRUPT;
   const uint8_t *directory = dinodes + (size_t)directory_inode * SM_FPKG_DINODE_SIZE;
@@ -251,6 +316,8 @@ static sm_fpkg_status_t outer_child(
       read, ctx, pfs_offset, block_count, data_block, block);
   if (status != SM_FPKG_OK)
     return status;
+  if (data_block_out)
+    *data_block_out = data_block;
 
   size_t limit = (size_t)directory_size;
   size_t at = 0;
@@ -297,37 +364,82 @@ static sm_fpkg_status_t validate_outer_metadata(
     return SM_FPKG_NOMEM;
   uint8_t *inode_table = workspace;
   uint8_t *io_block = workspace + SM_FPKG_OUTER_BLOCK_SIZE;
-  sm_fpkg_status_t result = SM_FPKG_CORRUPT;
+  uint8_t *descriptor = NULL;
+  uint32_t *image_map = NULL, *layout_map = NULL;
+  uint32_t *image_refs = NULL, *layout_refs = NULL;
+  uint64_t image_mapped = 0, layout_mapped = 0;
+  uint64_t image_ref_count = 0, layout_ref_count = 0;
   sm_fpkg_status_t status = read_outer_block(
       read, ctx, pfs_offset, block_count, table_block, inode_table);
   if (status != SM_FPKG_OK)
     goto done;
+  uint32_t root_dir_block, uroot_dir_block;
   status = outer_child(read, ctx, pfs_offset, block_count, inode_table,
-                       inode_count, 0, "uroot", &uroot_inode, io_block);
+                       inode_count, 0, "uroot", &uroot_inode,
+                       &root_dir_block, io_block);
   if (status != SM_FPKG_OK)
     goto done;
   status = outer_child(read, ctx, pfs_offset, block_count, inode_table,
                        inode_count, uroot_inode, "pfs_image.dat", &image_inode,
-                       io_block);
+                       &uroot_dir_block, io_block);
   if (status != SM_FPKG_OK)
     goto done;
   status = outer_child(read, ctx, pfs_offset, block_count, inode_table,
                        inode_count, uroot_inode, "naps_pkg_layout.dat",
-                       &layout_inode, io_block);
-  if (status != SM_FPKG_OK || image_inode == layout_inode)
+                       &layout_inode, NULL, io_block);
+  if (status != SM_FPKG_OK || image_inode == layout_inode ||
+      root_dir_block == uroot_dir_block ||
+      root_dir_block == superblock_index || uroot_dir_block == superblock_index ||
+      root_dir_block == table_block || uroot_dir_block == table_block)
     goto done;
   const uint8_t *files[] = {
       inode_table + (size_t)image_inode * SM_FPKG_DINODE_SIZE,
       inode_table + (size_t)layout_inode * SM_FPKG_DINODE_SIZE};
-  for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); ++i) {
-    status = validate_file_map(read, ctx, pfs_offset, block_count, files[i]);
-    if (status != SM_FPKG_OK)
-      goto done;
+  uint32_t reserved_blocks[] = {superblock_index, table_block, root_dir_block,
+                                uroot_dir_block};
+  uint64_t image_size = read_le64(files[0] + 8u);
+  uint64_t layout_size = read_le64(files[1] + 8u);
+  if (layout_size == 0 || layout_size > SM_FPKG_MAX_LAYOUT_SIZE ||
+      layout_size > SIZE_MAX) {
+    status = SM_FPKG_UNSUPPORTED;
+    goto done;
   }
-  result = SM_FPKG_OK;
+  status = build_file_map(read, ctx, pfs_offset, block_count, files[0],
+                          reserved_blocks, 4, &image_map, &image_mapped,
+                          &image_refs, &image_ref_count);
+  if (status != SM_FPKG_OK)
+    goto done;
+  status = build_file_map(read, ctx, pfs_offset, block_count, files[1],
+                          reserved_blocks, 4, &layout_map, &layout_mapped,
+                          &layout_refs, &layout_ref_count);
+  if (status != SM_FPKG_OK)
+    goto done;
+  if (reference_sets_overlap(image_refs, image_ref_count, layout_refs,
+                             layout_ref_count)) {
+    status = SM_FPKG_CORRUPT;
+    goto done;
+  }
+  descriptor = malloc((size_t)layout_size);
+  if (!descriptor) {
+    status = SM_FPKG_NOMEM;
+    goto done;
+  }
+  status = read_outer_file(read, ctx, pfs_offset, block_count, layout_map,
+                           layout_mapped, layout_size, descriptor, io_block);
+  if (status != SM_FPKG_OK)
+    goto done;
+  sm_fpkg_layout_t parsed_layout = {0};
+  status = sm_fpkg_layout_parse(descriptor, (size_t)layout_size, image_size,
+                                &parsed_layout);
+  sm_fpkg_layout_free(&parsed_layout);
 done:
+  free(descriptor);
+  free(image_map);
+  free(layout_map);
+  free(image_refs);
+  free(layout_refs);
   free(workspace);
-  return status != SM_FPKG_OK ? status : result;
+  return status;
 }
 
 sm_fpkg_status_t sm_fpkg_probe_stream(const char *name, uint64_t size,
