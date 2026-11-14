@@ -658,7 +658,7 @@ void process_scan_candidates(const scan_candidate_t *candidates,
   if (runtime_sleep_mode_active())
     return;
 
-  sm_install_poll_pending();
+  sm_install_poll_pending_for_scan();
 
   for (int i = 0; i < candidate_count; i++) {
     if (should_stop_requested() || runtime_sleep_mode_active() ||

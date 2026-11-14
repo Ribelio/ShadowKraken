@@ -18,6 +18,7 @@ static bool app_db_has_title;
 static bool app_db_has_failed_title;
 static bool cleanup_allowed = true;
 static unsigned cleanup_calls;
+static unsigned scan_runtime_release_calls;
 static uint64_t fake_clock = 100;
 static char cached_path[MAX_PATH];
 static char cleaned_generations[32][112];
@@ -65,7 +66,10 @@ void cache_game_entry(const char *path, const char *title_id,
           strcmp(title_name, "Failed Synthetic Game") == 0));
   (void)strlcpy(cached_path, path, sizeof(cached_path));
 }
-bool release_scan_runtime_mounts(void) { return true; }
+bool release_scan_runtime_mounts(void) {
+  ++scan_runtime_release_calls;
+  return true;
+}
 void clear_register_attempts(const char *title_id) { (void)title_id; }
 void clear_failed_mount_attempts(const char *title_id) { (void)title_id; }
 uint8_t bump_failed_mount_attempts(const char *title_id) {
@@ -248,6 +252,11 @@ int main(void) {
     assert(strcmp(cleaned_generations[first_many_generation_cleanup + i],
                   expected) == 0);
   }
+  unsigned releases_before_scan_poll = scan_runtime_release_calls;
+  sm_install_poll_pending_for_scan();
+  assert(scan_runtime_release_calls == releases_before_scan_poll);
+  sm_install_service_pending();
+  assert(scan_runtime_release_calls == releases_before_scan_poll + 1);
   puts("async FPKG cache cleanup waits for confirmed app.db registration");
   return 0;
 }

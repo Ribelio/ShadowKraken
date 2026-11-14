@@ -464,7 +464,7 @@ static void finalize_pending_install_timeout(pending_install_entry_t *entry) {
   }
 }
 
-static void poll_pending_installs(void) {
+static void poll_pending_installs(bool release_scan_mounts) {
   struct AppDbTitleList app_db_titles = {0};
   bool app_db_titles_ready = false;
   if (g_submitted_install_count > 0) {
@@ -503,7 +503,8 @@ static void poll_pending_installs(void) {
   if (g_submitted_install_count == 0)
     schedule_queued_install_submit(now_us);
   free_app_db_title_list(&app_db_titles);
-  if (!sm_install_has_pending_work() && !release_scan_runtime_mounts())
+  if (release_scan_mounts && !sm_install_has_pending_work() &&
+      !release_scan_runtime_mounts())
     log_debug("  [IMG] deferred release after install completion");
 }
 
@@ -545,7 +546,14 @@ void sm_install_poll_pending(void) {
   if (runtime_sleep_mode_active())
     return;
 
-  poll_pending_installs();
+  poll_pending_installs(true);
+}
+
+void sm_install_poll_pending_for_scan(void) {
+  if (runtime_sleep_mode_active())
+    return;
+
+  poll_pending_installs(false);
 }
 
 void sm_install_service_pending(void) {
