@@ -115,7 +115,7 @@ static int make_generation(int title_fd, const char *name, uint64_t inode) {
   assert(close(system_fd) == 0);
   write_at(generation_fd, "ampr_emu.index", "idx", 0644);
   write_at(generation_fd, "ampr_assets.index", "pak", 0644);
-  const char link_contents[] = "kraken/test.pkg\n";
+  const char link_contents[] = "kraken/synthetic.pkg\n";
   write_at(generation_fd, "kraken.image", link_contents, 0644);
 
   char built[2048];

@@ -1,6 +1,7 @@
 # FPKG cache transaction contract
 
-Issue #221. This contract applies before any cache code is implemented.
+Issue #221. The cache implementation follows this contract; host evidence and
+remaining failure-injection gaps are recorded below.
 
 ## State machine
 
@@ -75,10 +76,17 @@ or has ambiguous ownership cannot be scanned for rebuild, mutated, or purged.
 - Failure at extract, index write, flush, rename, journal update, registration or
   power-loss recovery must leave the last known-good generation reachable.
 
-## Failure-injection plan
+## Failure-injection coverage and gaps
 
-Once a cache implementation exists, inject failure after each stage above and
-assert: prior registration remains; previous good generation remains; unknown
-files and game-created files remain byte-identical; stale stages are safely
-quarantined; no cleanup traverses symlinks; mounted generations are not deleted;
-and rebuild is idempotent. These checks are not yet implemented or run.
+The synthetic cache fixtures currently cover cancellation during extraction and
+replacement, recovery of interrupted staging/orphan generations, invalid active
+pointers, symlink rejection, ownership-manifest cleanup, refusal to remove the
+active generation, and preservation of the previous active generation after a
+cancelled replacement. Runtime generation validation also checks that
+`kraken.image` contains the exact relative filename recorded by the source
+identity; a same-size altered target is rejected.
+
+The host fixtures do not inject failure after every individual `fsync`, rename,
+journal transition, and active-pointer publication syscall, and they do not
+simulate an actual power cut or PS5 filesystem behavior. Those remain separate
+validation work; see `docs/fpkg-test-results.md` for the current gate status.

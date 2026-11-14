@@ -127,8 +127,8 @@ The FPKG install lifecycle smoke check compiles the production SMP functions
 for TitleDir registration, title publication, and the `/app0/kraken` sandbox
 layer. It verifies nullfs → `mount.lnk` → registration ordering, rollback when
 link publication fails, the batch registration route, bridge/API result
-preservation, reuse/creation of the launch-time FPKG layer, and the read-only
-FPKG sandbox mount:
+preservation, the opt-in gate and source-parent resolution, reuse/creation of
+the launch-time FPKG layer, and the read-only FPKG sandbox mount:
 
 ```sh
 python3 tools/test_fpkg_install_lifecycle.py

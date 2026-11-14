@@ -17,8 +17,8 @@ def main():
     install = functions(root, "src/sm_install.c", [
         "sm_install_register_title_dir", "mount_and_install"])
     fakelib = functions(root, "src/sm_fakelib.c", [
-        "mount_fpkg_source_directory", "has_fpkg_sandbox_layer",
-        "mount_fpkg_source_if_needed"])
+        "resolve_fpkg_source_directory", "mount_fpkg_source_directory",
+        "has_fpkg_sandbox_layer", "mount_fpkg_source_if_needed"])
     with tempfile.TemporaryDirectory(prefix="sm-fpkg-install-lifecycle-") as directory:
         build = Path(directory)
         (build / "install_lifecycle.inc").write_text(

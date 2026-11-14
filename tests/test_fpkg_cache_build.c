@@ -287,6 +287,27 @@ int main(void) {
   assert(close(extracted_fd) == 0);
   assert(memcmp(image_name, "kraken/source.pkg\n", sizeof(image_name)) == 0);
 
+  static const char wrong_image[] = "kraken/xxxxxx.pkg\n";
+  static const char correct_image[] = "kraken/source.pkg\n";
+  assert(sizeof(wrong_image) == sizeof(correct_image));
+  assert(snprintf(path, sizeof(path), "%s/kraken.image", generation_path) > 0);
+  extracted_fd = open(path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(extracted_fd >= 0);
+  write_all(extracted_fd, wrong_image, sizeof(wrong_image) - 1u);
+  assert(fsync(extracted_fd) == 0 && close(extracted_fd) == 0);
+  sm_fpkg_cache_generation_info_t invalid_generation = {0};
+  assert(sm_fpkg_cache_read_generation_info(
+             cache_root, info.title_id, generation_path,
+             &invalid_generation) == SM_FPKG_CORRUPT);
+  extracted_fd = open(path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+  assert(extracted_fd >= 0);
+  write_all(extracted_fd, correct_image, sizeof(correct_image) - 1u);
+  assert(fsync(extracted_fd) == 0 && close(extracted_fd) == 0);
+  assert(sm_fpkg_cache_read_generation_info(
+             cache_root, info.title_id, generation_path,
+             &invalid_generation) == SM_FPKG_OK);
+  assert(invalid_generation.source_matches_snapshot);
+
   char second_source_path[MAX_PATH];
   assert(snprintf(second_source_path, sizeof(second_source_path),
                   "%s/source-v2.pkg", root) > 0);

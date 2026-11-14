@@ -1,6 +1,8 @@
 /* Host integration smoke check: production SMP functions, platform calls mocked. */
 #include "host_platform.h"
 #include "sm_appdb.h"
+#include "sm_config_mount.h"
+#include "sm_fpkg_cache.h"
 #include "sm_filesystem.h"
 #include "sm_image_cache.h"
 #include "sm_install.h"
@@ -12,6 +14,7 @@
 #include "sm_runtime.h"
 #include "sm_shellcore_hooks.h"
 #include "sm_title_state.h"
+#include <strings.h>
 
 #ifndef MNT_RDONLY
 #define MNT_RDONLY 0x00000001
@@ -50,6 +53,10 @@ static char sandbox_label[32];
 static int sandbox_flags;
 static int sandbox_calls;
 static fakelib_session_t g_fakelib_mount;
+static bool fpkg_feature_enabled;
+static sm_fpkg_status_t generation_info_status;
+static sm_fpkg_cache_generation_info_t generation_info;
+static unsigned generation_info_calls;
 
 static bool copy_sce_sys_to_appmeta(const char *src, const char *dst);
 static bool update_trophy_metadata(const char *title_id,
@@ -205,6 +212,22 @@ bool sm_shellcore_install_title_dir(const char *title_id,
   *result_out = api_result;
   return true;
 }
+bool sm_config_fpkg_direct_mount_enabled(void) {
+  return fpkg_feature_enabled;
+}
+sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
+    const char *cache_root, const char *title_id, const char *generation_path,
+    sm_fpkg_cache_generation_info_t *info_out) {
+  assert(strcmp(cache_root, SM_FPKG_CACHE_DEFAULT_ROOT) == 0);
+  assert(strcmp(title_id, k_title) == 0);
+  assert(strcmp(generation_path,
+                "/data/shadowmount/fpkg-cache/PPSA00001/generation-host-test")
+         == 0);
+  ++generation_info_calls;
+  if (generation_info_status == SM_FPKG_OK)
+    *info_out = generation_info;
+  return generation_info_status;
+}
 void mark_register_attempted(const char *title_id) { (void)title_id; }
 void invalidate_app_db_title_cache(void) {}
 void clear_register_attempts(const char *title_id) { (void)title_id; }
@@ -346,10 +369,58 @@ static void test_fpkg_sandbox_mount_route(void) {
   assert(sandbox_flags == MNT_RDONLY);
 }
 
+static void test_fpkg_source_parent_resolution(void) {
+  char temporary[] = "/private/tmp/sm-fpkg-source-parent.XXXXXX";
+  if (access("/private/tmp", W_OK) != 0)
+    (void)strlcpy(temporary, "/tmp/sm-fpkg-source-parent.XXXXXX",
+                  sizeof(temporary));
+  char *parent = mkdtemp(temporary);
+  assert(parent != NULL);
+  char source_path[MAX_PATH];
+  int length = snprintf(source_path, sizeof(source_path), "%s/source.PKG",
+                        parent);
+  assert(length > 0 && (size_t)length < sizeof(source_path));
+
+  const char *generation =
+      "/data/shadowmount/fpkg-cache/PPSA00001/generation-host-test";
+  char directory[MAX_PATH];
+  fpkg_feature_enabled = false;
+  generation_info_calls = 0;
+  errno = 0;
+  assert(!resolve_fpkg_source_directory(k_title, generation, directory));
+  assert(errno == ENOTSUP && directory[0] == '\0' &&
+         generation_info_calls == 0);
+
+  fpkg_feature_enabled = true;
+  generation_info_status = SM_FPKG_OK;
+  generation_info = (sm_fpkg_cache_generation_info_t){0};
+  (void)strlcpy(generation_info.source_path, source_path,
+                sizeof(generation_info.source_path));
+  generation_info.source_matches_snapshot = false;
+  errno = 0;
+  assert(!resolve_fpkg_source_directory(k_title, generation, directory));
+  assert(errno == ESTALE && directory[0] == '\0' &&
+         generation_info_calls == 1);
+
+  generation_info.source_matches_snapshot = true;
+  assert(resolve_fpkg_source_directory(k_title, generation, directory));
+  assert(strcmp(directory, parent) == 0);
+
+  length = snprintf(generation_info.source_path,
+                    sizeof(generation_info.source_path),
+                    "%s/missing/source.pkg", parent);
+  assert(length > 0 && (size_t)length < sizeof(generation_info.source_path));
+  errno = 0;
+  assert(!resolve_fpkg_source_directory(k_title, generation, directory));
+  assert(errno == ENOENT && directory[0] == '\0');
+  assert(rmdir(parent) == 0);
+}
+
 int main(void) {
   test_title_dir_registration_routes();
   test_install_publication_and_registration_order();
   test_fpkg_sandbox_mount_route();
-  puts("FPKG lifecycle routing: registration, rollback, batch path, layer reuse, and read-only sandbox target passed");
+  test_fpkg_source_parent_resolution();
+  puts("FPKG lifecycle routing: opt-in source resolution, registration, rollback, layer reuse, and read-only sandbox target passed");
   return 0;
 }

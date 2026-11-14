@@ -44,7 +44,8 @@ static atomic_uint_fast64_t g_cache_generation_counter = ATOMIC_VAR_INIT(1);
 
 static int rename_noreplace(int from_fd, const char *from, int to_fd,
                             const char *to);
-static bool validate_generation_owned_tree(int generation_fd);
+static bool validate_generation_owned_tree(int generation_fd,
+                                           const char *title_id);
 
 static bool is_cancelled(const sm_fpkg_cache_options_t *options) {
   return options && options->is_cancelled &&
@@ -790,7 +791,7 @@ static sm_fpkg_status_t read_generation_identity(
     status = SM_FPKG_CORRUPT;
   }
   if (status == SM_FPKG_OK && require_published &&
-      !validate_generation_owned_tree(generation_fd)) {
+      !validate_generation_owned_tree(generation_fd, title_id)) {
     status = SM_FPKG_CORRUPT;
   }
 
@@ -1117,12 +1118,37 @@ static bool validate_owned_cache_tree(int directory_fd, const char *prefix,
   return valid;
 }
 
-static bool validate_generation_owned_tree(int generation_fd) {
+static bool validate_generation_owned_tree(int generation_fd,
+                                           const char *title_id) {
   owned_cache_manifest_t manifest;
   if (parse_owned_cache_manifest(generation_fd, &manifest) != SM_FPKG_OK)
     return false;
+  sm_fpkg_cache_generation_info_t source = {0};
+  bool source_valid =
+      read_generation_source_metadata(generation_fd, title_id, &source);
+  bool image_valid = false;
+  if (source_valid) {
+    const char *leaf = strrchr(source.source_path, '/');
+    leaf = leaf ? leaf + 1 : source.source_path;
+    char expected_image[MAX_PATH + 8u];
+    int expected_length = snprintf(expected_image, sizeof(expected_image),
+                                   "kraken/%s\n", leaf);
+    if (expected_length > 0 &&
+        (size_t)expected_length < sizeof(expected_image)) {
+      char *image = NULL;
+      size_t image_size = 0;
+      if (read_owned_file(generation_fd, "kraken.image",
+                          sizeof(expected_image) - 1u, &image,
+                          &image_size) == SM_FPKG_OK) {
+        image_valid = image_size == (size_t)expected_length &&
+                      memcmp(image, expected_image, image_size) == 0;
+        free(image);
+      }
+    }
+  }
   owned_tree_check_t check = {.manifest = &manifest};
-  bool valid = validate_owned_cache_tree(generation_fd, "", 0u, &check) &&
+  bool valid = source_valid && image_valid &&
+               validate_owned_cache_tree(generation_fd, "", 0u, &check) &&
                check.built_seen && check.done_seen && check.journal_seen &&
                check.kraken_seen &&
                find_owned_cache_file(&manifest, "ampr_emu.index") &&
@@ -1576,7 +1602,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   status = parse_owned_cache_manifest(generation_fd, &manifest);
   if (status != SM_FPKG_OK)
     goto cleanup;
-  if (!validate_generation_owned_tree(generation_fd)) {
+  if (!validate_generation_owned_tree(generation_fd, title_id)) {
     status = SM_FPKG_CORRUPT;
     goto cleanup;
   }
@@ -2130,7 +2156,8 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
                                generation_name);
     if (path_length < 0 || (size_t)path_length >= sizeof(expected_generation_path))
       status = SM_FPKG_UNSUPPORTED;
-    if (status == SM_FPKG_OK && !validate_generation_owned_tree(stage_fd))
+    if (status == SM_FPKG_OK &&
+        !validate_generation_owned_tree(stage_fd, metadata->title_id))
       status = SM_FPKG_CORRUPT;
     if (status == SM_FPKG_OK)
       status = replace_journal_state(stage_fd, "verified");
