@@ -3,9 +3,11 @@
 
 #include "sm_limits.h"
 
-// Resolve emulators_path/ampr-emu-ng/libSceAmpr.sprx and verify its embedded
-// ampr-emu-ng identity marker. Returns 0 on success, -1 with errno on failure.
+// Resolve an installed emulators_path/ampr-emu-ng/libSceAmpr.sprx. If it is
+// absent, atomically install the pinned runtime under fallback_root. Existing
+// non-NG files are preserved and rejected. Returns 0 on success, -1 on error.
 int sm_ampr_resolve_ng_runtime(const char *emulators_path,
+                               const char *fallback_root,
                                char runtime_path[MAX_PATH]);
 
 // Return 1 for an ampr-emu-ng binary, 0 for another file, and -1 on I/O error.

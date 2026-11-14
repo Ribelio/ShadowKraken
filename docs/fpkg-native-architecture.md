@@ -15,13 +15,15 @@ result is recorded in `docs/fpkg-test-results.md`.
 | ShadowMountPlus | `8b1f48e086bed93e1ad53158d1103054e362f54d` (`1.7`) | GPL-3.0 | Upstream default branch is `1.7`. |
 | Kraken Mount | `4b420d579bd381796d773875e36d14c9acaabf39` (`main`) | GPL-3.0-or-later | Reader, decoder, cache, index writer and launch reference. |
 | ampr-emu-ng | `920e9172b6bf99bd9210361b545e2953659d1e9b` (v0.4.0 source) | GPL-3.0-or-later | Exact source revision corresponding to Kraken's bundled runtime. |
-| bundled AMPR runtime | v0.4.0, SHA-256 `8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218` | GPL-3.0-or-later | Kraken `vendor/ampr-emu-ng/SHA256SUMS`; binary is not copied into SMP. |
+| bundled AMPR runtime | v0.4.0, SHA-256 `8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218` | GPL-3.0-or-later | Exact upstream artifact is under `vendor/ampr-emu-ng-v0.4.0/`, embedded in the payload, and installed to a private runtime directory only when no user runtime is present. |
 | ps5-dump-forge | `8a3c7d3e4bfeac3b4ddf8e9ff020e819ae8ff1cd` (`main`) | GPL-3.0 | Its Rust tests generate temporary plaintext FPKGs from synthetic files; no game content or fixture binary is shipped. |
 
 SMP, Kraken Mount, ampr-emu-ng and ps5-dump-forge all state GPL-3.0-compatible
 terms. A native port derived from Kraken remains GPL-covered; it must preserve
-attribution and the repository's GPL distribution terms. No Rust, Cargo runtime,
-Kraken daemon or proprietary game data is part of the planned SMP implementation.
+attribution and the repository's GPL distribution terms. SMP adds no Rust
+toolchain, Cargo runtime, Kraken daemon or proprietary game data. The pinned
+AMPR NG PRX is a separate, unmodified GPL binary with its provenance and license
+recorded in `licenses/AMPR-NG-NOTICE.md`.
 
 PR #200 (`quer3q/ShadowMountPlus`, head `3663a32e56130c722ee0aa77623be5f19d5674ee`)
 is still open against `1.7`, not part of the inspected SMP baseline. It proposes
@@ -29,9 +31,11 @@ recognizing/updating AMPR NG in fakelib. This branch uses its distinct
 `<emulators_path>/ampr-emu-ng/libSceAmpr.sprx` storage convention but keeps the
 existing SMP updater's top-level upstream AMPR target separate. Native FPKG
 launch now verifies the NG identity and places that runtime last in the
-SMP-owned fakelib cache, after package, backport and global libraries. This
-does not port PR #200's updater; the NG runtime must already be installed in
-that directory. PS5-side loader selection still needs console verification.
+SMP-owned fakelib cache, after package, backport and global libraries. A
+compatible user-provided runtime there takes precedence; when that file is
+missing, SMP installs its pinned v0.4.0 runtime into a private data directory.
+The existing top-level updater remains separate. PS5-side loader selection
+still needs console verification.
 PR #206 is
 also open against `1.7` (head
 `3596e602f7c1c89faff53d55215fc02e89a48703`); it changes same-title process
@@ -95,7 +99,7 @@ expects it. SMP lifecycle and mount-state code retain ownership through cleanup.
 | Plain folder | Existing SMP source/mount path | Existing SMP fakelib behavior; PR #200 proposes NG-specific handling | Not console-verified here | Preserve |
 | ZSTD folder | Existing AMPR NG detects `ampr_zstd.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
 | LZ4 folder (`AMPRPAK4`) | Existing AMPR NG detects `ampr_assets.index` | Existing fakelib path; NG identity/update behavior depends on PR #200 | Not console-verified here | Unchanged |
-| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | SMP copies the identity-checked runtime from `<emulators_path>/ampr-emu-ng/` last into its owned fakelib cache; when general fakelib is disabled, the cache contains only the required runtime | Host path/identity and fakelib syntax checks pass; codec-2 reads and PS5 launch remain unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent read-only |
+| Plaintext debug FPKG | AMPR NG v0.4.0 `crates/ampr-sys/src/rt/pack/pkg.rs` selects `pkg` mode and reads `/app0/kraken.image` | A compatible runtime at `<emulators_path>/ampr-emu-ng/` takes precedence; otherwise SMP installs the pinned runtime in its private data directory and copies it last into the owned fakelib cache. If general fakelib is disabled, the cache contains only the required runtime. | Host resolver, bundled fallback install, identity checks and Fakelib syntax pass; codec-2 reads and PS5 launch remain unverified | Generate AMPRIDX3 and AMPRPAK4 codec-2 records; mount package parent read-only |
 
 The v0.4.0 source was inspected at commit
 `920e9172b6bf99bd9210361b545e2953659d1e9b`. Its `crates/ampr-pkg/src/manifest.rs`
@@ -195,14 +199,15 @@ KrakenMount's `launch.rs` mounts the package parent read-only at sandbox
 technical deviation is ownership: SMP records and cleans this mount through its
 existing layer/FSID session instead of KrakenMount's standalone session and
 retry loop. SMP does not force-unmount an ambiguous layer. FPKG launch requires
-an AMPR NG runtime at `<emulators_path>/ampr-emu-ng/libSceAmpr.sprx`; the helper
-checks its embedded `ampr-emu-ng ` marker and fails closed if it is absent or
-has the wrong identity. This is a runtime-family check, not signature or
-license verification. The reference runtime is ampr-emu-ng v0.4.0, SHA-256
-`8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218`; this
-branch checks the family marker, not that digest or the runtime's binary
-signature. Runtime distribution/update remains external to this branch, and
-PS5-side selection and behavior are not verified by host tests.
+an AMPR NG runtime. A compatible user-provided file at
+`<emulators_path>/ampr-emu-ng/libSceAmpr.sprx` takes precedence; if absent, SMP
+atomically stages its pinned v0.4.0 runtime under
+`/data/shadowmount/fpkg-runtime/ampr-emu-ng/`. A file at either location with
+the wrong family marker is preserved and rejected. The bundled runtime SHA-256
+is `8320eb65c16565f42031b9d88b15a447039f0fd7e5694faf5f1cb84cafdba218` and CI
+checks it against the vendored checksum. Runtime identity checks are not
+signature or license verification. PS5-side library selection and behavior
+remain unverified by host tests.
 
 ## Decision record
 

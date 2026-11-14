@@ -16,6 +16,7 @@
 #define AMPR_EMULATOR_FILE_NAME "libSceAmpr.sprx"
 /* PR #200 keeps the distinct ampr-emu-ng runtime below emulators_path. */
 #define AMPR_NG_EMULATOR_DIR "ampr-emu-ng"
+#define SM_FPKG_AMPR_RUNTIME_ROOT "/data/shadowmount/fpkg-runtime"
 #define FAKELIB_CACHE_PATH "/data/shadowmount/cache"
 #define ICON_CACHE_DIR "/data/shadowmount/icon-cache"
 #define LOG_DIR "/data/shadowmount"

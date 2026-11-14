@@ -1696,6 +1696,7 @@ static bool init_cache_context(const char *title_id, const char *game_path,
 
   if (fpkg_runtime &&
       sm_ampr_resolve_ng_runtime(cfg->emulators_path,
+                                 SM_FPKG_AMPR_RUNTIME_ROOT,
                                  context->ampr_ng_path) != 0) {
     return false;
   }

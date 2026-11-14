@@ -32,8 +32,8 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | Targeted cache harness: `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Wno-macro-redefined -Dst_mtim=st_mtimespec -Dst_ctim=st_ctimespec -Iinclude -Isrc -Itests -include tests/host_platform.h -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_cache.c src/sm_fpkg_cache.c -o /private/tmp/sm-fpkg-cache-test && /private/tmp/sm-fpkg-cache-test` | PASS (targeted) | Synthetic active generation, source identity, symlinked active pointer, interrupted stage, orphaned generation, quarantine report, active-generation cleanup refusal, foreign-file refusal and ownership-aware quarantine/removal passed under ASan/UBSan. |
 | Targeted end-to-end synthetic cache build: `tests/test_fpkg_cache_build.c` linked with the native FPKG reader/tree/index/cache modules and host shims under ASan/UBSan | PASS (targeted, macOS arm64) | A generated plaintext fixture with a 256 KiB inner PFS block size and 64 KiB inode-table pages passed parsing, loose `eboot.bin`/`sce_sys/param.json` extraction, AMPRIDX3/AMPRPAK4 creation, `kraken.image` path generation, cancellation after partial extraction, recovery, and reuse. A second-source rebuild cancelled after artifact generation preserved the prior active pointer. No commercial package was opened. |
 | Targeted async registration cleanup: `tests/test_install_queue_fpkg.c` linked with `src/sm_install_queue.c` under ASan/UBSan | PASS (targeted, macOS arm64) | Confirms the old FPKG generation is retained while an AppInstallAll title is queued/submitted, released only after the title appears in app.db, and retained on registration timeout. |
-| AMPR NG runtime selection: `tests/test_ampr_runtime.c` linked with `src/sm_ampr_runtime.c` under ASan/UBSan | PASS (targeted, macOS arm64) | Resolves only the distinct `ampr-emu-ng/libSceAmpr.sprx` path, finds a marker split across a 64 KiB read boundary, rejects upstream AMPR identity, and reports a missing runtime. This tests identity/path selection, not PS5 library loading. |
-| `CC=clang python3 tools/test_runtime_config.py --sanitize` | PASS (targeted, macOS arm64) | Production config tests cover opt-in FPKG setting persistence/reload together with concurrent config readers and scanner config watches. The test harness now uses Darwin stat/linker aliases and a test-only barrier shim. |
+| AMPR NG runtime selection/bootstrap: `tests/test_ampr_runtime.c` linked with `src/sm_ampr_runtime.c` and the generated pinned runtime asset under ASan/UBSan | PASS (targeted, macOS arm64) | Selects a user-provided NG runtime before the bundled fallback, finds a marker split across a 64 KiB read boundary, rejects upstream AMPR without overwriting it, atomically installs and reuses the pinned runtime, preserves/rejects a wrong-family fallback, and rejects symlinked fallback roots/files. This does not test PS5 library loading. |
+| Pinned AMPR runtime artifact | PASS (targeted) | `vendor/ampr-emu-ng-v0.4.0/libSceAmpr.sprx` matches the SHA-256 in its vendored `SHA256SUMS`; the Linux workflow repeats that verification. |
 | Updated FPKG reader and tree checks: `tests/test_fpkg_header.c` and `tests/test_fpkg_tree.c` under ASan/UBSan | PASS (targeted, macOS arm64) | The synthetic full-reader fixture now verifies that the superblock's PFS block size positions the inode table, while inode records remain paged in 64 KiB units. The focused test-header harness supplies a false fd-identity stub because it exercises callback-backed readers only. |
 | Targeted syntax checks: `clang -std=gnu11 -Wall -Wextra -Werror -Wno-macro-redefined ... -fsyntax-only src/sm_scan.c src/sm_scan_tree.c src/sm_install.c src/sm_shellcore_service.c src/sm_fakelib.c src/sm_ampr_runtime.c` with the macOS host shim and Darwin stat-time aliases | PASS (targeted) | Changed scanner, install, runtime, Fakelib cache integration and AMPR identity translation units pass host syntax checking with declarations for PS5 SDK calls supplied by the test shim. This does not validate PS5 ABI or behavior. |
 | Targeted API syntax check: `clang -std=gnu11 -Wall -Wextra -Werror ... -fsyntax-only src/sm_api_service.c` with the host shim and Homebrew json-c/libmicrohttpd headers | PASS (targeted, macOS arm64) | The settings GET/update integration compiles with its host dependencies available. This does not validate PS5 API behavior. |
@@ -92,16 +92,18 @@ byte-identical streaming readback of its `eboot.bin` and `sce_sys/param.json`,
 one byte-identical real metadata block decode, the standalone Kraken descriptor
 parser against a synthetic descriptor also accepted by ps5-dump-forge, byte
 comparison of writer output against pinned Kraken and AMPR codec-2 readback, the
-native Kraken decoder against synthetic reference vectors, and AMPR NG identity
-and path selection. Host syntax checks cover the changed scanner, install,
-runtime, Fakelib cache integration and AMPR identity translation units and
+native Kraken decoder against synthetic reference vectors, and AMPR NG identity,
+user-runtime precedence and bundled fallback installation. Host syntax checks
+cover the changed scanner, install, runtime, Fakelib cache integration and
+AMPR identity translation units and
 `sm_api_service.c`; the API syntax check uses Homebrew json-c and
 libmicrohttpd headers. Cache generation against a full FPKG,
 AppInstallTitleDir registration, the PS5 `/app0/kraken` mount and game launch
 remain unverified on console. Fakelib cache composition with the NG runtime
-also remains unverified on PS5. The runtime must be installed at
-`<emulators_path>/ampr-emu-ng/libSceAmpr.sprx`; an absent or non-NG file causes
-launch preparation to fail closed. The existing updater still targets the
-upstream AMPR file at the top level and does not provision the NG subdirectory.
-The production config writer's FPKG setting roundtrip is covered by the host
-config test.
+also remains unverified on PS5. SMP uses a compatible runtime at
+`<emulators_path>/ampr-emu-ng/libSceAmpr.sprx` when present; otherwise it installs
+the pinned v0.4.0 binary into `/data/shadowmount/fpkg-runtime/`. A wrong-family
+file at either location blocks FPKG launch preparation and is not overwritten.
+The existing updater still targets the top-level upstream AMPR file. The
+production config writer's FPKG setting roundtrip is covered by the host config
+test.

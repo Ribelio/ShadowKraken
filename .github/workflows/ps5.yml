@@ -125,9 +125,15 @@ jobs:
 
       - name: Run FPKG cache and lifecycle host checks
         run: |
+          (cd vendor/ampr-emu-ng-v0.4.0 && \
+            sha256sum --check --ignore-missing --strict SHA256SUMS)
+          xxd -i -n sm_ampr_ng_runtime \
+            vendor/ampr-emu-ng-v0.4.0/libSceAmpr.sprx \
+            src/ampr_emu_ng_runtime_asset.c
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             tests/test_ampr_runtime.c src/sm_ampr_runtime.c \
+            src/ampr_emu_ng_runtime_asset.c \
             -o /tmp/sm-ampr-runtime-test
           /tmp/sm-ampr-runtime-test
           clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -Itests \
