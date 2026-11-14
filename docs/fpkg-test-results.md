@@ -24,7 +24,7 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | Command | Result | Evidence / reason |
 | --- | --- | --- |
 | `make -n help` | FAIL (environment) | Make stops while including missing `/opt/ps5-payload-sdk/toolchain/prospero.mk`. No source compilation occurs. |
-| `python3 tools/test_runtime_config.py --sanitize` | FAIL (platform) | macOS `struct stat` lacks Linux `st_mtim`/`st_ctim` names used by the existing implementation/test, and macOS headers do not expose `pthread_barrier_t` under this test's flags. |
+| `CC=clang python3 tools/test_runtime_config.py --sanitize` | PASS (targeted, macOS arm64) | The test harness supplies Darwin stat/linker aliases and a test-only barrier shim; production config reload, concurrency and watcher checks pass. |
 | `python3 tools/test_shellcore.py --sanitize` | PARTIAL/FAIL (platform) | ptrace unit portion passed; remaining test assembly uses x86-64 GNU syntax and cannot assemble for this arm64 macOS host. |
 | `python3 tools/test_scan_permissions.py` | PASS (targeted) | Also checks uppercase `.PKG` discovery callback stays disabled until `fpkg_direct_mount` is enabled. Host shim now overrides the macOS `strlcpy` macro portably. |
 | `python3 tools/test_shellcore_launch.py --sanitize` | PASS | `Launch ownership: abandoned switch recovery, retry identity, fallback, live owner and mutation guards passed`. |
@@ -35,6 +35,7 @@ Date: 2026-11-14. This is an execution record, not a claim of FPKG compatibility
 | `CC=clang python3 tools/test_runtime_config.py --sanitize` | PASS (targeted, macOS arm64) | Production config tests cover opt-in FPKG setting persistence/reload together with concurrent config readers and scanner config watches. The test harness now uses Darwin stat/linker aliases and a test-only barrier shim. |
 | Updated FPKG reader and tree checks: `tests/test_fpkg_header.c` and `tests/test_fpkg_tree.c` under ASan/UBSan | PASS (targeted, macOS arm64) | The synthetic full-reader fixture now verifies that the superblock's PFS block size positions the inode table, while inode records remain paged in 64 KiB units. The focused test-header harness supplies a false fd-identity stub because it exercises callback-backed readers only. |
 | Targeted syntax checks: `clang -std=gnu11 -Wall -Wextra -Werror -Wno-macro-redefined ... -fsyntax-only src/sm_scan.c src/sm_scan_tree.c src/sm_install.c src/sm_shellcore_service.c src/sm_fakelib.c` with the macOS host shim and Darwin stat-time aliases | PASS (targeted) | Changed scanner, install, runtime and Fakelib translation units pass host syntax checking with declarations for PS5 SDK calls supplied by the test shim. This does not validate PS5 ABI or behavior. |
+| Targeted API syntax check: `clang -std=gnu11 -Wall -Wextra -Werror ... -fsyntax-only src/sm_api_service.c` with the host shim and Homebrew json-c/libmicrohttpd headers | PASS (targeted, macOS arm64) | The settings GET/update integration compiles with its host dependencies available. This does not validate PS5 API behavior. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_header.c src/sm_fpkg.c src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c src/sm_fpkg_index.c -o /tmp/sm-fpkg-header-test && /tmp/sm-fpkg-header-test` | PASS (focused safety test) | Synthetic FIH/PFS eligibility, bounded CNT table and payload extents, outer direct/indirect maps, mapped descriptor parse, three-block image reads, retained file enumeration and `eboot.bin` range read, package block mapping for aligned inner and CNT files, unaligned-block rejection, package-to-AMPR index construction for packed and caller-selected extracted files, streaming extraction success and cancellation rollback, CNT `icon0.png` fallback enumeration/read, and inner tree validation pass under ASan/UBSan. This is not a game or real-package compatibility fixture. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_index.c src/sm_fpkg_index.c src/sm_fpkg.c src/sm_fpkg_layout.c src/sm_fpkg_image.c src/sm_fpkg_decoder.c src/sm_fpkg_tree.c -o /tmp/sm-fpkg-index-test && /tmp/sm-fpkg-index-test` | PASS (focused safety test) | Synthetic AMPRIDX3/AMPRPAK4 layout, RAW and codec-2 descriptors, CRCs, duplicate/case-folded paths, traversal, invalid UTF-8 and package-bound checks passed under ASan/UBSan. |
 | `clang -std=gnu11 -O1 -g -Wall -Wextra -Werror -Iinclude -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_fpkg_layout.c src/sm_fpkg_layout.c -o /private/tmp/sm-fpkg-layout-overlap-test && /private/tmp/sm-fpkg-layout-overlap-test` | PASS (focused safety test) | Synthetic raw 256 KiB Kraken descriptor, a legal 62-byte stored-range overlap, resource bounds, compression/shuffle rejection, sparse rejection and short input passed under ASan/UBSan. |
@@ -92,9 +93,8 @@ parser against a synthetic descriptor also accepted by ps5-dump-forge, byte
 comparison of writer output against pinned Kraken and AMPR codec-2 readback, and
 the native Kraken decoder against synthetic reference vectors. Host syntax
 checks cover the changed scanner, install, runtime and Fakelib translation
-units. Cache generation against a full FPKG, AppInstallTitleDir registration,
-the PS5 `/app0/kraken` mount and game launch remain unverified on console.
-The complete `sm_api_service.c` translation unit could not be syntax-checked on
-this host because the libmicrohttpd development header is not installed; its
-settings route changes remain part of Linux CI validation. The production config
-writer's FPKG setting roundtrip is covered by the host config test.
+units and `sm_api_service.c`; the API syntax check uses Homebrew json-c and
+libmicrohttpd headers. Cache generation against a full FPKG,
+AppInstallTitleDir registration, the PS5 `/app0/kraken` mount and game launch
+remain unverified on console. The production config writer's FPKG setting
+roundtrip is covered by the host config test.
