@@ -155,10 +155,11 @@ Planned implementation areas, gated in order:
    Huffman-coded arrays; differential coverage currently uses synthetic vectors
    only. Do not duplicate `sm_pkg` metadata handling.
 2. `src/sm_fpkg_index.c` now builds AMPRIDX3 and AMPRPAK4, including codec-2
-   records. A test-only harness uses the pinned AMPR v0.4.0 readers to open both
-   generated indexes, read one codec-2 chunk from a synthetic package and
-   compare decoded bytes. Golden byte-comparison and broader record coverage
-   remain. The reference Rust crate is test-only; SMP has no Rust dependency.
+   records. A test-only harness byte-compares both generated indexes against the
+   pinned Kraken writer with a fixed timestamp, then uses the pinned AMPR v0.4.0
+   readers to read and decode a codec-2 chunk from a synthetic package. Broader
+   record coverage remains. Reference Rust code is test-only; SMP has no Rust
+   dependency.
 3. Existing cache owner, with transaction journal, source fingerprint and disabled
    configuration key in `sm_config_mount.c`, config file/API surfaces as needed.
 4. Scanner/registration/lifecycle/mount path extensions, only after prior gates.

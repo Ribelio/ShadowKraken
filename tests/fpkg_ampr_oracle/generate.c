@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <utime.h>
 
 #include "sm_fpkg_index.h"
 
@@ -69,6 +70,11 @@ int main(int argc, char **argv) {
   int result = write_file(index_path, index.data, index.size) |
                write_file(manifest_path, manifest.data, manifest.size) |
                write_file(package_path, package, PACKAGE_SIZE);
+  if (result == 0) {
+    struct utimbuf fixed_time = {.actime = 123, .modtime = 123};
+    if (utime(package_path, &fixed_time) != 0)
+      result = -1;
+  }
   if (result != 0)
     fprintf(stderr, "failed writing oracle inputs: %s\n", strerror(errno));
   free(package);

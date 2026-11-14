@@ -1,6 +1,11 @@
 use ampr_pkg::kraken::{decode_block, Desc, Scratch};
 use std::env;
 use std::fs;
+use std::path::Path;
+
+#[path = "../../../kraken-mount-reference/src/ampr_index.rs"]
+#[allow(dead_code)]
+mod kraken_ampr_index;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -31,6 +36,35 @@ fn main() {
     assert_eq!(descriptor, 0x20000);
 
     let package = fs::read(&args[3]).unwrap();
+    let reference_dir = Path::new(&args[2]).parent().unwrap().join("reference");
+    fs::create_dir_all(&reference_dir).unwrap();
+    let reference_package = reference_dir.join("kraken.pkg");
+    fs::copy(&args[3], &reference_package).unwrap();
+    let reference_file = kraken_ampr_index::IndexFile {
+        path: "eboot.bin".to_string(),
+        size: 0x40000,
+        chunks: Some(vec![kraken_ampr_index::Chunk {
+            pkg_off: 0x20000,
+            stored_len: 0x40000,
+            raw_len: 0x40000,
+            kraken: Some(kraken_ampr_index::Kraken {
+                even_len: 0x20000,
+                mode: 0,
+            }),
+        }]),
+    };
+    kraken_ampr_index::write(&reference_dir, &reference_package, &[reference_file])
+        .expect("pinned Kraken writer generates reference indexes");
+    assert_eq!(
+        fs::read(&args[1]).unwrap(),
+        fs::read(reference_dir.join("ampr_emu.index")).unwrap(),
+        "AMPRIDX3 output matches pinned Kraken writer byte for byte"
+    );
+    assert_eq!(
+        fs::read(&args[2]).unwrap(),
+        fs::read(reference_dir.join("ampr_assets.index")).unwrap(),
+        "AMPRPAK4 output matches pinned Kraken writer byte for byte"
+    );
     let start = usize::try_from(offset).unwrap();
     let end = start.checked_add(chunk.stored_size as usize).unwrap();
     let stored = package.get(start..end).expect("chunk remains inside pack 0");
@@ -49,5 +83,5 @@ fn main() {
     for (i, byte) in decoded.iter().enumerate() {
         assert_eq!(*byte, ((i * 29 + i / 113) & 0xff) as u8, "byte {i}");
     }
-    println!("pinned AMPR readers accepted indexes and decoded the codec-2 pack chunk");
+    println!("C indexes match the pinned Kraken writer byte for byte; pinned AMPR readers decoded the codec-2 pack chunk");
 }
