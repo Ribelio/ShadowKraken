@@ -42,7 +42,7 @@ command output or console log therefore does not exist for these cases.
 | Gate | Status |
 | --- | --- |
 | G0 repository/source/license audit | Source and license audit recorded. Baseline PS5 build is blocked by missing SDK. PR #200 is open, not merged. |
-| G1 legal-fixture differential reader tests | NOT MET; no package fixture or C reader implementation. |
+| G1 legal-fixture differential reader tests | NOT MET; only the envelope/CNT/outer-metadata probe exists, with no legal FPKG fixture or inner reader. |
 | G2 decoder differential/sanitizer/fuzz gates | NOT MET; no C decoder implementation. |
 | G3 byte-identical indexes and runtime readback | NOT MET; no C index writer or pinned AMPR oracle run. |
 | G4 safe cache crash/recovery tests | Design contract recorded; implementation and failure injection not run. |
