@@ -362,9 +362,20 @@ void log_fpkg_trace_path(const char *key, const char *path) {
       close(current);
       return;
     }
-    log_debug("  [FPKG-TRACE]   %s -> ok mode=%o uid=%ld", cursor,
+    struct stat fst;
+    int fstat_result = fstat(next, &fst);
+    int fstat_errno = errno;
+    log_debug("  [FPKG-TRACE]   %s -> open fd=%d; fstatat=%d errno=%d (%s) "
+              "mode=%o uid=%ld; fstat=%d errno=%d mode=%o dev=%ld ino=%ld",
+              cursor, next, lstat_result,
+              lstat_result == 0 ? 0 : lstat_errno,
+              lstat_result == 0 ? "-" : strerror(lstat_errno),
               lstat_result == 0 ? (unsigned)st.st_mode : 0u,
-              lstat_result == 0 ? (long)st.st_uid : -1L);
+              lstat_result == 0 ? (long)st.st_uid : -1L, fstat_result,
+              fstat_result == 0 ? 0 : fstat_errno,
+              fstat_result == 0 ? (unsigned)fst.st_mode : 0u,
+              fstat_result == 0 ? (long)fst.st_dev : -1L,
+              fstat_result == 0 ? (long)fst.st_ino : -1L);
     close(current);
     current = next;
     cursor = slash ? slash + 1 : NULL;
