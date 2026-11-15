@@ -284,12 +284,9 @@ static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
     errno = ENOTSUP;
     return false;
   }
-  if (!sm_shellcore_try_begin_external_mutation()) {
-    log_fpkg_trace(candidate->title_id,
-               "busy: ShellCore mutation, launch or release in progress");
-    errno = EBUSY;
-    return false;
-  }
+  /* Runs inside a scan cycle, which already holds the ShellCore external
+   * mutation claim (run_full_scan_cycle, run_targeted_scan_cycle). Claiming
+   * it again here always failed with EBUSY. */
 
   bool prepared = false;
   int source_fd = -1;
@@ -375,7 +372,6 @@ static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
     sm_fpkg_close(fpkg);
   if (source_fd >= 0)
     close(source_fd);
-  sm_shellcore_end_external_mutation();
   return prepared;
 }
 

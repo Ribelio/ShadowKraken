@@ -944,7 +944,11 @@ static void test_candidate_to_registered_launch_flow(void) {
 
   reset_events();
   char previous_generation[MAX_PATH];
+  /* As the scan cycle does: the claim is held around prepare. */
+  assert(sm_shellcore_try_begin_external_mutation());
   assert(prepare_fpkg_candidate(candidate, previous_generation));
+  assert(external_mutation_active);
+  sm_shellcore_end_external_mutation();
   assert(!candidate->fpkg &&
          strcmp(candidate->path, expected_generation_path) == 0);
   assert(previous_generation[0] == '\0' && !external_mutation_active);
