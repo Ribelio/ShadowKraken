@@ -276,7 +276,7 @@ static bool relative_parent(int root_fd, const char *path, bool create,
 static sm_fpkg_status_t append_text(cache_text_t *text, const char *bytes,
                                     size_t length) {
   if (length > SM_FPKG_CACHE_MANIFEST_LIMIT - text->size)
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   size_t needed = text->size + length;
   if (needed > text->capacity) {
     size_t capacity = text->capacity ? text->capacity : 1024u;
@@ -305,7 +305,7 @@ static sm_fpkg_status_t append_manifest_file(cache_text_t *text,
   int length = snprintf(line, sizeof(line), "file=%llu:%s\n",
                         (unsigned long long)size, path);
   if (length < 0 || (size_t)length >= sizeof(line))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   return append_text(text, line, (size_t)length);
 }
 
@@ -413,15 +413,15 @@ static sm_fpkg_status_t estimate_extraction(
   *metadata_out = false;
   size_t count = sm_fpkg_file_count(fpkg);
   if (count == 0 || count > 1000000u)
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   for (size_t i = 0; i < count; ++i) {
     sm_fpkg_file_t file;
     if (!sm_fpkg_file_at(fpkg, i, &file))
-      return SM_FPKG_CORRUPT;
+      return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     if (file.is_directory)
       continue;
     if (is_ampr_pack_index(file.path))
-      return SM_FPKG_UNSUPPORTED;
+      return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     if (!select_loose_file(file.path, selector))
       continue;
     if (sm_fpkg_backport_find(selector->backport, file.path) != SIZE_MAX)
@@ -429,7 +429,7 @@ static sm_fpkg_status_t estimate_extraction(
     if (!safe_relative_path(file.path) || is_reserved_cache_path(file.path) ||
         file.size > limit ||
         *bytes_out > limit - file.size)
-      return SM_FPKG_UNSUPPORTED;
+      return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     *bytes_out += file.size;
     ++*count_out;
     if (!strcasecmp(file.path, "eboot.bin") ||
@@ -446,12 +446,12 @@ static sm_fpkg_status_t estimate_extraction(
   size_t override_count = sm_fpkg_backport_count(selector->backport);
   const sm_fpkg_index_file_t *overrides = selector->overrides;
   if (override_count && !overrides)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   for (size_t i = 0; i < override_count; ++i) {
     const sm_fpkg_index_file_t *file = &overrides[i];
     if (!safe_relative_path(file->path) || is_reserved_cache_path(file->path) ||
         file->size > limit || *bytes_out > limit - file->size)
-      return SM_FPKG_UNSUPPORTED;
+      return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     *bytes_out += file->size;
     ++*count_out;
     if (!strcasecmp(file->path, "eboot.bin") || !strcasecmp(file->path, "eboot2.bin"))
@@ -534,7 +534,7 @@ static sm_fpkg_status_t read_owned_file(int directory_fd, const char *name,
       (uint64_t)st.st_size > max_size) {
     close(fd);
     errno = EPERM;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   size_t size = (size_t)st.st_size;
   char *contents = malloc(size + 1u);
@@ -565,7 +565,7 @@ static sm_fpkg_status_t read_owned_file(int directory_fd, const char *name,
   if (memchr(contents, '\0', size) != NULL) {
     free(contents);
     errno = EINVAL;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   contents[size] = '\0';
   *contents_out = contents;
@@ -771,7 +771,7 @@ static sm_fpkg_status_t read_generation_identity(
   if (generation_fd_out)
     *generation_fd_out = -1;
   if (!valid_generation_name(generation_name))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   int generation_fd = openat(title_fd, generation_name,
                              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (generation_fd < 0)
@@ -785,7 +785,7 @@ static sm_fpkg_status_t read_generation_identity(
       (directory_stat.st_mode & 0022) != 0) {
     close(generation_fd);
     errno = EPERM;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
 
   char *journal = NULL, *done = NULL, *built = NULL;
@@ -809,14 +809,14 @@ static sm_fpkg_status_t read_generation_identity(
         !text_has_line(built, expected_title) ||
         !text_has_line(done, "SM-FPKG-DONE-1") ||
         !text_has_line(done, expected_title)) {
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     }
   }
   if (status == SM_FPKG_OK) {
     sm_fpkg_cache_generation_info_t source_identity = {0};
     if (!read_generation_source_metadata(generation_fd, title_id,
                                          &source_identity))
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   if (status == SM_FPKG_OK) {
     char *cursor = built;
@@ -829,12 +829,12 @@ static sm_fpkg_status_t read_generation_identity(
     }
     if (!fingerprint_line || strlen(fingerprint_line) < 17u ||
         fingerprint_line[16] != '\n') {
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     } else {
       for (size_t i = 0; i < 16u; ++i) {
         char c = fingerprint_line[i];
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
-          status = SM_FPKG_CORRUPT;
+          status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
           break;
         }
       }
@@ -848,7 +848,7 @@ static sm_fpkg_status_t read_generation_identity(
         !text_has_line(done, expected_fingerprint) ||
         strncmp(generation_name + 4u, fingerprint_line, 16u) != 0 ||
         generation_name[20] != '-') {
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     } else if (fingerprint_out) {
       memcpy(fingerprint_out, fingerprint_line, 16u);
       fingerprint_out[16] = '\0';
@@ -857,11 +857,11 @@ static sm_fpkg_status_t read_generation_identity(
   if (status == SM_FPKG_OK && require_published &&
       (!text_has_line(journal, "SM-FPKG-JOURNAL-1") ||
        !text_has_line(journal, "state=published"))) {
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   if (status == SM_FPKG_OK && require_published &&
       !validate_generation_owned_tree(generation_fd, title_id)) {
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
 
   free(journal);
@@ -946,7 +946,7 @@ static sm_fpkg_status_t read_active_generation(
     int title_fd, const char *title_id, char generation_name_out[112]) {
   generation_name_out[0] = '\0';
   if (!recover_publication_alias(title_fd, "active"))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char *active = NULL;
   size_t active_size = 0;
   sm_fpkg_status_t status = read_owned_file(
@@ -962,19 +962,19 @@ static sm_fpkg_status_t read_active_generation(
       active[active_size - 1u] != '\n') {
     free(active);
     errno = EINVAL;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   size_t generation_length = active_size - prefix_size - 1u;
   if (generation_length >= 112u) {
     free(active);
     errno = ENAMETOOLONG;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   memcpy(generation_name_out, active + prefix_size, generation_length);
   generation_name_out[generation_length] = '\0';
   free(active);
   if (!valid_generation_name(generation_name_out))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   return read_generation_identity(title_fd, generation_name_out, title_id,
                                   true, NULL, NULL);
 }
@@ -1094,7 +1094,7 @@ static sm_fpkg_status_t parse_owned_cache_manifest_named(
   while (cursor < contents + size) {
     char *end = memchr(cursor, '\n', (size_t)(contents + size - cursor));
     if (!end) {
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
       break;
     }
     size_t line_length = (size_t)(end - cursor);
@@ -1102,14 +1102,14 @@ static sm_fpkg_status_t parse_owned_cache_manifest_named(
       char *number = cursor + 5u;
       char *colon = memchr(number, ':', line_length - 5u);
       if (!colon || colon == number) {
-        status = SM_FPKG_CORRUPT;
+        status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
         break;
       }
       uint64_t file_size = 0;
       for (char *p = number; p < colon; ++p) {
         if (*p < '0' || *p > '9' ||
             file_size > (UINT64_MAX - (uint64_t)(*p - '0')) / 10u) {
-          status = SM_FPKG_CORRUPT;
+          status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
           break;
         }
         file_size = file_size * 10u + (uint64_t)(*p - '0');
@@ -1119,7 +1119,7 @@ static sm_fpkg_status_t parse_owned_cache_manifest_named(
       const char *path = colon + 1;
       size_t path_length = (size_t)(end - path);
       if (!add_owned_cache_file(manifest, path, path_length, file_size)) {
-        status = SM_FPKG_CORRUPT;
+        status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
         break;
       }
     }
@@ -1135,12 +1135,12 @@ static sm_fpkg_status_t parse_owned_cache_manifest_named(
   for (size_t i = 1; i < manifest->count; ++i) {
     if (strcmp(manifest->files[i - 1u].path, manifest->files[i].path) == 0) {
       free_owned_cache_manifest(manifest);
-      return SM_FPKG_CORRUPT;
+      return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     }
   }
   if (!manifest->count) {
     free_owned_cache_manifest(manifest);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   return SM_FPKG_OK;
 }
@@ -1621,13 +1621,13 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   char root[MAX_PATH];
   if (!writable_path_out || !generation_path || !valid_title_id(title_id) ||
       !normalize_cache_root(cache_root, root))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char prefix[MAX_PATH];
   int length = snprintf(prefix, sizeof(prefix), "%s/%s/", root, title_id);
   if (length < 0 || (size_t)length >= sizeof(prefix) ||
       strncmp(generation_path, prefix, (size_t)length) != 0 ||
       !valid_generation_name(generation_path + length))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   const char *generation = generation_path + length;
   int root_fd = open_directory_path(root, false);
   if (root_fd < 0) {
@@ -1643,7 +1643,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   size_t pointer_size = 0, built_size = 0;
   sm_fpkg_status_t status = SM_FPKG_IO_AT();
   if (!safe_cache_directory_fd(root_fd)) {
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     goto done_writable;
   }
   title_fd = openat(root_fd, title_id,
@@ -1651,14 +1651,14 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   if (title_fd < 0)
     goto done_writable;
   if (!safe_cache_directory_fd(title_fd)) {
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     goto done_writable;
   }
   lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0)
     goto done_writable;
   if (!recover_publication_alias(title_fd, ".writable-active")) {
-    status = SM_FPKG_CORRUPT; goto done_writable;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
   }
   status = read_generation_identity(title_fd, generation, title_id, true,
                                     &generation_fd, NULL);
@@ -1689,25 +1689,25 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
         !S_ISREG(pointer_identity.st_mode) ||
         pointer_identity.st_uid != geteuid() || pointer_identity.st_nlink != 1 ||
         (pointer_identity.st_mode & 0022) != 0) {
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
     if (!text_has_line(pointer, "SM-FPKG-WRITABLE-1") ||
         !text_line_value(pointer, "generation=", old_generation, sizeof(old_generation)) ||
         !valid_generation_name(old_generation) ||
         !text_line_value(pointer, "upper=", old_upper, sizeof(old_upper)) ||
         !valid_writable_name(old_upper)) {
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
     int meta_length = snprintf(old_meta, sizeof(old_meta), ".meta-%s", old_upper);
     if (meta_length < 0 || (size_t)meta_length >= sizeof(old_meta)) {
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
     status = parse_owned_cache_manifest_named(title_fd, old_meta, &old_manifest);
     if (status != SM_FPKG_OK) goto done_writable;
     source_fd = openat(title_fd, old_upper,
                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (source_fd < 0 || !safe_cache_directory_fd(source_fd)) {
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
     if (!strcmp(old_generation, generation)) {
       char *old_built = NULL;
@@ -1717,18 +1717,18 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
       bool same = status == SM_FPKG_OK && old_built_size == built_size &&
                   !memcmp(old_built, built, built_size);
       free(old_built);
-      if (!same) { status = SM_FPKG_CORRUPT; goto done_writable; }
+      if (!same) { status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable; }
       length = snprintf(writable_path_out, MAX_PATH, "%s/%s/%s", root, title_id, old_upper);
       status = length > 0 && length < MAX_PATH ? SM_FPKG_OK : SM_FPKG_UNSUPPORTED;
       goto done_writable;
     }
   } else {
-    if (pointer_stat_result == 0) { status = SM_FPKG_CORRUPT; goto done_writable; }
+    if (pointer_stat_result == 0) { status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable; }
     source_fd = openat(title_fd, "writable",
                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (source_fd < 0 && errno != ENOENT) { status = SM_FPKG_CORRUPT; goto done_writable; }
+    if (source_fd < 0 && errno != ENOENT) { status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable; }
     if (source_fd >= 0 && !safe_cache_directory_fd(source_fd)) {
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
   }
   conflicts.count = old_manifest.count + new_manifest.count;
@@ -1749,7 +1749,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   (void)snprintf(meta, sizeof(meta), ".meta-%s", upper);
   (void)snprintf(temporary, sizeof(temporary), ".active-%s", upper);
   length = snprintf(writable_path_out, MAX_PATH, "%s/%s/%s", root, title_id, upper);
-  if (length < 0 || length >= MAX_PATH) { status = SM_FPKG_UNSUPPORTED; goto done_writable; }
+  if (length < 0 || length >= MAX_PATH) { status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED); goto done_writable; }
   if (mkdirat(title_fd, stage, 0700) != 0) { status = SM_FPKG_IO_AT(); goto done_writable; }
   writable_fd = openat(title_fd, stage, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (source_fd >= 0) {
@@ -1774,7 +1774,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
                     "SM-FPKG-WRITABLE-1\ngeneration=%s\nupper=%s\n",
                     generation, upper);
   if (length < 0 || (size_t)length >= sizeof(contents)) {
-    status = SM_FPKG_UNSUPPORTED; goto done_writable;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED); goto done_writable;
   }
   status = write_new_file(title_fd, temporary, contents, (size_t)length, 0600);
   if (status != SM_FPKG_OK) goto done_writable;
@@ -1784,7 +1784,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
                 AT_SYMLINK_NOFOLLOW) != 0 ||
         !same_writable_stat(&pointer_identity, &current_pointer)) {
       errno = ESTALE;
-      status = SM_FPKG_CORRUPT; goto done_writable;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT); goto done_writable;
     }
   }
   int renamed = had_pointer ? renameat(title_fd, temporary, title_fd, ".writable-active")
@@ -1895,17 +1895,17 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
     const char *cache_root, const char *title_id,
     sm_fpkg_cache_recovery_report_t *report_out) {
   if (!report_out || !valid_title_id(title_id))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   memset(report_out, 0, sizeof(*report_out));
   char normalized_root[MAX_PATH];
   if (!normalize_cache_root(cache_root, normalized_root))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   int root_fd = open_directory_path(normalized_root, false);
   if (root_fd < 0)
     return errno == ENOENT ? SM_FPKG_OK : SM_FPKG_IO;
   if (!safe_cache_directory_fd(root_fd)) {
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int title_fd = openat(root_fd, title_id,
                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -1917,7 +1917,7 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
   if (!safe_cache_directory_fd(title_fd)) {
     close(title_fd);
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0) {
@@ -1936,7 +1936,7 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
                           normalized_root, title_id, active_generation);
     if (length < 0 ||
         (size_t)length >= sizeof(report_out->active_generation))
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   }
   if (status == SM_FPKG_OK) {
     int iterator_fd = openat(title_fd, ".",
@@ -2001,7 +2001,7 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
   if (!generation_path_out || !source_metadata ||
       !valid_title_id(source_metadata->title_id) ||
       !valid_text_path(source_metadata->path, MAX_PATH))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   sm_fpkg_backport_t *backport = NULL;
   sm_fpkg_status_t snapshot_status = sm_fpkg_backport_open(backport_path, &backport);
   if (snapshot_status != SM_FPKG_OK)
@@ -2010,13 +2010,13 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
   sm_fpkg_backport_close(backport);
   char normalized_root[MAX_PATH];
   if (!normalize_cache_root(cache_root, normalized_root))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   int root_fd = open_directory_path(normalized_root, false);
   if (root_fd < 0)
     return errno == ENOENT ? SM_FPKG_UNSUPPORTED : SM_FPKG_IO;
   if (!safe_cache_directory_fd(root_fd)) {
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int title_fd = openat(root_fd, source_metadata->title_id,
                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -2028,7 +2028,7 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
   if (!safe_cache_directory_fd(title_fd)) {
     close(title_fd);
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0) {
@@ -2042,19 +2042,19 @@ sm_fpkg_status_t sm_fpkg_cache_find_current_generation_with_backport(
   sm_fpkg_status_t status = read_active_generation(
       title_fd, source_metadata->title_id, generation_name);
   if (status == SM_FPKG_OK && generation_name[0] == '\0')
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (status == SM_FPKG_OK &&
       !generation_matches_source(title_fd, generation_name,
                                  source_metadata->title_id,
                                  source_metadata, backport_fingerprint))
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (status == SM_FPKG_OK) {
     int length = snprintf(generation_path_out, MAX_PATH, "%s/%s/%s",
                           normalized_root, source_metadata->title_id,
                           generation_name);
     if (length < 0 || length >= MAX_PATH) {
       generation_path_out[0] = '\0';
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     }
   }
 
@@ -2078,33 +2078,33 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
     sm_fpkg_cache_generation_info_t *info_out) {
   if (!info_out || !valid_title_id(title_id) ||
       !valid_text_path(generation_path, MAX_PATH))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   memset(info_out, 0, sizeof(*info_out));
   char normalized_root[MAX_PATH];
   if (!normalize_cache_root(cache_root, normalized_root))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char expected_prefix[MAX_PATH];
   int prefix_length = snprintf(expected_prefix, sizeof(expected_prefix),
                                "%s/%s/", normalized_root, title_id);
   if (prefix_length < 0 || (size_t)prefix_length >= sizeof(expected_prefix) ||
       strncmp(generation_path, expected_prefix, (size_t)prefix_length) != 0)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   const char *generation_name = generation_path + prefix_length;
   if (!valid_generation_name(generation_name))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char expected_path[MAX_PATH];
   int path_length = snprintf(expected_path, sizeof(expected_path), "%s/%s/%s",
                              normalized_root, title_id, generation_name);
   if (path_length < 0 || (size_t)path_length >= sizeof(expected_path) ||
       strcmp(expected_path, generation_path) != 0)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
 
   int root_fd = open_directory_path(normalized_root, false);
   if (root_fd < 0)
     return SM_FPKG_IO_AT();
   if (!safe_cache_directory_fd(root_fd)) {
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int title_fd = openat(root_fd, title_id,
                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -2115,7 +2115,7 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
   if (!safe_cache_directory_fd(title_fd)) {
     close(title_fd);
     close(root_fd);
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   int lock_fd = open_title_lock(title_fd, false);
   if (lock_fd < 0) {
@@ -2133,13 +2133,13 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
                           expected_path);
     if (length < 0 || (size_t)length >= sizeof(info_out->generation_path) ||
         !read_generation_source_metadata(generation_fd, title_id, info_out)) {
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     } else {
       char source_copy[MAX_PATH];
       (void)strlcpy(source_copy, info_out->source_path, sizeof(source_copy));
       char *slash = strrchr(source_copy, '/');
       if (!slash || slash == source_copy) {
-        status = SM_FPKG_CORRUPT;
+        status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
       } else {
         const char *leaf = strrchr(info_out->source_path, '/');
         leaf = leaf ? leaf + 1 : info_out->source_path;
@@ -2205,18 +2205,18 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
     sm_fpkg_cache_cleanup_end_fn end_cleanup, void *ctx) {
   if (!valid_title_id(title_id) || !valid_generation_name(generation_name) ||
       !begin_cleanup || !end_cleanup)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char normalized_root[MAX_PATH];
   if (!normalize_cache_root(cache_root, normalized_root))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char generation_path[MAX_PATH];
   int path_length = snprintf(generation_path, sizeof(generation_path),
                              "%s/%s/%s", normalized_root, title_id,
                              generation_name);
   if (path_length < 0 || (size_t)path_length >= sizeof(generation_path))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (!begin_cleanup(title_id, generation_path, ctx))
-    return SM_FPKG_CANCELLED;
+    return SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
 
   sm_fpkg_status_t status = SM_FPKG_IO_AT();
   int root_fd = open_directory_path(normalized_root, false);
@@ -2247,7 +2247,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   if (status != SM_FPKG_OK)
     goto cleanup;
   if (strcmp(active_generation, generation_name) == 0) {
-    status = SM_FPKG_CANCELLED;
+    status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
     goto cleanup;
   }
   status = read_generation_identity(title_fd, generation_name, title_id, true,
@@ -2263,7 +2263,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   if (status != SM_FPKG_OK)
     goto cleanup;
   if (!validate_generation_owned_tree(generation_fd, title_id)) {
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     goto cleanup;
   }
 
@@ -2275,7 +2275,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
       generation_name + 4u, (long)getpid(), (unsigned long long)serial);
   if (quarantine_length < 0 ||
       (size_t)quarantine_length >= sizeof(quarantine_name)) {
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     goto cleanup;
   }
   if (rename_noreplace(title_fd, generation_name, title_fd,
@@ -2316,12 +2316,12 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
                                               const char *state) {
   if (strcmp(state, "staging") && strcmp(state, "verified") &&
       strcmp(state, "published") && strcmp(state, "failed"))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   char contents[96];
   int length = snprintf(contents, sizeof(contents),
                         "SM-FPKG-JOURNAL-1\nstate=%s\n", state);
   if (length < 0 || (size_t)length >= sizeof(contents))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
 
   struct stat existing;
   if (fstatat(directory_fd, ".journal", &existing, AT_SYMLINK_NOFOLLOW) != 0)
@@ -2329,7 +2329,7 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
   if (!S_ISREG(existing.st_mode) || existing.st_uid != geteuid() ||
       existing.st_nlink != 1 || (existing.st_mode & 0022) != 0) {
     errno = EPERM;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   char temporary[96];
   uint64_t serial = atomic_fetch_add_explicit(
@@ -2338,7 +2338,7 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
                              ".journal-%ld-%llu", (long)getpid(),
                              (unsigned long long)serial);
   if (temp_length < 0 || (size_t)temp_length >= sizeof(temporary))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   int fd = openat(directory_fd, temporary,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0)
@@ -2446,7 +2446,7 @@ static sm_fpkg_status_t write_active_generation(
                         "SM-FPKG-ACTIVE-1\ngeneration=%s\n",
                         generation_name);
   if (length < 0 || (size_t)length >= sizeof(contents))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   uint64_t serial = atomic_fetch_add_explicit(
       &g_cache_generation_counter, 1u, memory_order_relaxed);
   char temporary[96];
@@ -2454,7 +2454,7 @@ static sm_fpkg_status_t write_active_generation(
                              ".active-%ld-%llu", (long)getpid(),
                              (unsigned long long)serial);
   if (temp_length < 0 || (size_t)temp_length >= sizeof(temporary))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   int fd = openat(title_fd, temporary,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0)
@@ -2485,9 +2485,9 @@ static sm_fpkg_status_t cache_begin(void *opaque,
   cache_sink_t *sink = opaque;
   *file_ctx_out = NULL;
   if (is_cancelled(sink->options))
-    return SM_FPKG_CANCELLED;
+    return SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
   if (file->is_directory || !safe_relative_path(file->path))
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   cache_file_t *context = calloc(1, sizeof(*context));
   if (!context)
     return SM_FPKG_NOMEM;
@@ -2526,10 +2526,10 @@ static sm_fpkg_status_t cache_write(void *opaque, uint64_t offset,
                                     const void *bytes, size_t size) {
   cache_file_t *file = opaque;
   if (is_cancelled(file->sink->options))
-    return SM_FPKG_CANCELLED;
+    return SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
   if (offset != file->written || file->written > file->expected_size ||
       size > file->expected_size - file->written)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   sm_fpkg_status_t status = write_all(file->fd, bytes, size);
   if (status == SM_FPKG_OK)
     file->written += size;
@@ -2540,7 +2540,7 @@ static sm_fpkg_status_t cache_finish(void *opaque, bool commit) {
   cache_file_t *file = opaque;
   sm_fpkg_status_t status = SM_FPKG_OK;
   if (commit && file->written != file->expected_size)
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   if (commit && status == SM_FPKG_OK && fchmod(file->fd, file->mode) != 0)
     status = SM_FPKG_IO_AT();
   if (commit && status == SM_FPKG_OK && fsync(file->fd) != 0)
@@ -2549,7 +2549,7 @@ static sm_fpkg_status_t cache_finish(void *opaque, bool commit) {
     status = SM_FPKG_IO_AT();
   if (commit && status == SM_FPKG_OK) {
     if (file->written > UINT64_MAX - file->sink->total_written)
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     else
       file->sink->total_written += file->written;
   }
@@ -2566,7 +2566,7 @@ static sm_fpkg_status_t stage_backport_files(
     return SM_FPKG_NOMEM;
   sm_fpkg_status_t status = SM_FPKG_OK;
   for (size_t i = 0; i < count && status == SM_FPKG_OK; ++i) {
-    if (is_cancelled(sink->options)) { status = SM_FPKG_CANCELLED; break; }
+    if (is_cancelled(sink->options)) { status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED); break; }
     int source = sm_fpkg_backport_open_file(backport, i);
     if (source < 0) { status = SM_FPKG_IO_AT(); break; }
     sm_fpkg_file_t file = {.path = files[i].path, .size = files[i].size};
@@ -2620,7 +2620,7 @@ static sm_fpkg_status_t append_identity(cache_text_t *manifest,
       (long long)metadata->source_mtime, metadata->source_mtime_ns,
       (unsigned long long)metadata->source_ctime, metadata->source_ctime_ns);
   if (length < 0 || (size_t)length >= sizeof(header))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   return append_text(manifest, header, (size_t)length);
 }
 
@@ -2633,12 +2633,12 @@ static sm_fpkg_status_t write_cache_artifacts(
   filename = filename ? filename + 1 : source_path;
   if (!filename[0] || strchr(filename, '\n') || strchr(filename, '\r') ||
       strlen(filename) > NAME_MAX)
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   char image_link[NAME_MAX + 16];
   int link_length = snprintf(image_link, sizeof(image_link), "kraken/%s\n",
                              filename);
   if (link_length < 0 || (size_t)link_length >= sizeof(image_link))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   sm_fpkg_status_t status = write_new_file(
       stage_fd, "ampr_emu.index", index->data, index->size, 0644);
   if (status == SM_FPKG_OK)
@@ -2659,7 +2659,7 @@ static sm_fpkg_status_t write_cache_artifacts(
       "SM-FPKG-DONE-1\ntitle=%s\nfingerprint=%016llx\n",
       title_id, (unsigned long long)fingerprint);
   if (done_length < 0 || (size_t)done_length >= sizeof(done))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   status = write_new_file(stage_fd, ".done", done, (size_t)done_length, 0600);
   if (status == SM_FPKG_OK && fsync(stage_fd) != 0)
     status = SM_FPKG_IO_AT();
@@ -2679,9 +2679,9 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       !fpkg || !valid_title_id(metadata->title_id) ||
       metadata->pkg_kind != PKG_KIND_BASE ||
       !metadata->pkg_classification_confident)
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   if (is_cancelled(options))
-    return SM_FPKG_CANCELLED;
+    return SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
 
   char normalized_cache_root[MAX_PATH];
   (void)strlcpy(normalized_cache_root, cache_root,
@@ -2695,10 +2695,10 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   if (!realpath(source_path, canonical_source) ||
       strcmp(source_path, canonical_source) != 0 ||
       !source_snapshot_matches(source_fd, canonical_source, metadata))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   int source_flags = fcntl(source_fd, F_GETFL);
   if (source_flags < 0 || (source_flags & O_ACCMODE) != O_RDONLY)
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   struct stat fd_stat;
   if (fstat(source_fd, &fd_stat) != 0 || !S_ISREG(fd_stat.st_mode))
     return SM_FPKG_IO_AT();
@@ -2708,7 +2708,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       reader_stat.st_dev != fd_stat.st_dev ||
       reader_stat.st_ino != fd_stat.st_ino ||
       !sm_pkg_source_matches(metadata, &reader_stat))
-    return SM_FPKG_UNSUPPORTED;
+    return SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   uint64_t limit = options && options->max_extract_bytes
                        ? options->max_extract_bytes
                        : SM_FPKG_CACHE_DEFAULT_EXTRACT_LIMIT;
@@ -2721,7 +2721,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       root_stat.st_uid != geteuid() || (root_stat.st_mode & 0022) != 0) {
     close(root_fd);
     errno = EPERM;
-    return SM_FPKG_CORRUPT;
+    return SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   }
   bool title_created = false;
   int title_fd = open_or_create_child_dir(root_fd, metadata->title_id, 0700,
@@ -2770,7 +2770,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
                                active_generation);
     if (path_length < 0 || path_length >= MAX_PATH) {
       generation_path_out[0] = '\0';
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     }
     sm_fpkg_backport_close(backport);
     (void)flock(lock_fd, LOCK_UN);
@@ -2842,7 +2842,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
                                  source_filename);
     if (image_link_length < 0 ||
         (size_t)image_link_length >= sizeof(image_link))
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   }
   if (status == SM_FPKG_OK)
     status = append_manifest_file(&built, "ampr_emu.index", index.size);
@@ -2857,14 +2857,14 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
        manifest.size > UINT64_MAX - required_space - index.size ||
        SM_FPKG_CACHE_RESERVE_BYTES > UINT64_MAX - required_space -
                                          index.size - manifest.size))
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (status == SM_FPKG_OK)
     required_space += index.size + manifest.size +
                       SM_FPKG_CACHE_RESERVE_BYTES;
   if (status == SM_FPKG_OK && !checked_free_space(title_fd, required_space))
     status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK && is_cancelled(options))
-    status = SM_FPKG_CANCELLED;
+    status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
 
   uint64_t fingerprint = source_fingerprint(metadata);
   uint64_t serial = atomic_fetch_add_explicit(
@@ -2918,12 +2918,12 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
     size_t file_count = sm_fpkg_file_count(fpkg);
     for (size_t i = 0; i < file_count; ++i) {
       if (is_cancelled(options)) {
-        status = SM_FPKG_CANCELLED;
+        status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
         break;
       }
       sm_fpkg_file_t file;
       if (!sm_fpkg_file_at(fpkg, i, &file)) {
-        status = SM_FPKG_CORRUPT;
+        status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
         break;
       }
       if (file.is_directory || !select_loose_file(file.path, &selector))
@@ -2934,7 +2934,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
       if (status != SM_FPKG_OK)
         break;
       if (sink_ctx.total_written > limit) {
-        status = SM_FPKG_UNSUPPORTED;
+        status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
         break;
       }
     }
@@ -2942,20 +2942,20 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   if (status == SM_FPKG_OK)
     status = stage_backport_files(backport, overrides, &sink_ctx);
   if (status == SM_FPKG_OK && sink_ctx.total_written != extract_bytes)
-    status = SM_FPKG_CORRUPT;
+    status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
   if (status == SM_FPKG_OK && is_cancelled(options))
-    status = SM_FPKG_CANCELLED;
+    status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
   if (status == SM_FPKG_OK && !source_snapshot_matches(
                                    source_fd, canonical_source, metadata))
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (status == SM_FPKG_OK && !sm_fpkg_backport_unchanged(backport))
-    status = SM_FPKG_UNSUPPORTED;
+    status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
   if (status == SM_FPKG_OK)
     status = write_cache_artifacts(stage_fd, canonical_source,
                                    metadata->title_id, fingerprint,
                                    &index, &manifest, &built);
   if (status == SM_FPKG_OK && is_cancelled(options))
-    status = SM_FPKG_CANCELLED;
+    status = SM_FPKG_ST_AT(SM_FPKG_CANCELLED);
   if (status == SM_FPKG_OK) {
     char expected_generation_path[MAX_PATH];
     int path_length = snprintf(expected_generation_path,
@@ -2963,10 +2963,10 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
                                normalized_cache_root, metadata->title_id,
                                generation_name);
     if (path_length < 0 || (size_t)path_length >= sizeof(expected_generation_path))
-      status = SM_FPKG_UNSUPPORTED;
+      status = SM_FPKG_ST_AT(SM_FPKG_UNSUPPORTED);
     if (status == SM_FPKG_OK &&
         !validate_generation_owned_tree(stage_fd, metadata->title_id))
-      status = SM_FPKG_CORRUPT;
+      status = SM_FPKG_ST_AT(SM_FPKG_CORRUPT);
     if (status == SM_FPKG_OK)
       status = replace_journal_state(stage_fd, "verified");
     if (status == SM_FPKG_OK && fsync(title_fd) != 0)

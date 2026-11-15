@@ -60,4 +60,19 @@ void notify_image_mount_failed(const char *path, int mount_err);
   })
 #endif
 
+
+#ifndef SM_CHECKED_SYSCALLS
+#define SM_FPKG_ST_AT(st) (st)
+#else
+/* Diagnostic: log where an FPKG non-OK status is produced. */
+#define SM_FPKG_ST_AT(st)                                                     \
+  ({                                                                          \
+    int sm_st_errno_ = errno;                                                 \
+    log_fpkg_trace("st", "%s:%d %s errno=%d", __FILE__, __LINE__, #st,       \
+                   sm_st_errno_);                                             \
+    errno = sm_st_errno_;                                                     \
+    (st);                                                                     \
+  })
+#endif
+
 #endif

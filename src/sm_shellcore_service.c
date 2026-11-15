@@ -468,10 +468,11 @@ static bool prepare_title_runtime(const char *title_id,
       return false;
     }
     sm_fpkg_cache_generation_info_t generation_info;
-    if (sm_fpkg_cache_read_generation_info(
-            SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path,
-            &generation_info) != SM_FPKG_OK) {
-      log_debug("  [LAUNCH-TRACE] %s: generation info unreadable errno=%d", title_id, errno);
+    sm_fpkg_status_t info_status = sm_fpkg_cache_read_generation_info(
+        SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path, &generation_info);
+    if (info_status != SM_FPKG_OK) {
+      log_debug("  [LAUNCH-TRACE] %s: generation info unreadable status=%d errno=%d source=%s",
+                title_id, (int)info_status, errno, source_path);
       errno = ESTALE;
       return false;
     }
