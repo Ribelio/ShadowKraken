@@ -10,6 +10,11 @@
 #include <unistd.h>
 
 #include "sm_paths.h"
+#ifdef SM_CHECKED_SYSCALLS
+/* This file does not include sm_platform.h; without this, link() is the
+ * SDK's raw wrapper and returns EOPNOTSUPP (45) instead of -1. */
+#include "sm_syscall_checked.h"
+#endif
 
 #define AMPR_IDENTITY_CHUNK (64u * 1024u)
 
