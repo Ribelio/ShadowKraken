@@ -821,6 +821,7 @@ static bool try_collect_candidate_for_fpkg(
       generation_status != SM_FPKG_UNSUPPORTED) {
     log_fpkg_trace(package_info.title_id, "cache generation lookup status=%d",
                (int)generation_status);
+    log_fpkg_trace_path(package_info.title_id, SM_FPKG_CACHE_DEFAULT_ROOT);
     if (unstable_found_out)
       *unstable_found_out = true;
     return true;

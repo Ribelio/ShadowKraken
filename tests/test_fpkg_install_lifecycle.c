@@ -554,6 +554,10 @@ static void update_registered_title_snd0info(const char *title_id) {
 }
 void notify_system_l10n(sm_l10n_key_t key, ...) { (void)key; }
 void log_debug(const char *format, ...) { (void)format; }
+void log_fpkg_trace_path(const char *key, const char *path) {
+  (void)key;
+  (void)path;
+}
 void log_fpkg_trace(const char *key, const char *format, ...) {
   (void)key;
   (void)format;

@@ -12,6 +12,9 @@ void log_debug(const char *fmt, ...);
 // Log why a native FPKG candidate was skipped, once per key until the reason
 // changes: the scanner revisits a title every few seconds.
 void log_fpkg_trace(const char *key, const char *fmt, ...);
+// Log each component of a directory walk from / with its errno and the
+// effective uid, to explain a cache path that cannot be opened.
+void log_fpkg_trace_path(const char *key, const char *path);
 // Prepare notification assets such as the packaged icon file.
 void sm_notifications_init(void);
 // Flush and close persistent log resources.

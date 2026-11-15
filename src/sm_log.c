@@ -332,6 +332,46 @@ void log_fpkg_trace(const char *key, const char *fmt, ...) {
     log_debug("  [FPKG-TRACE] %s: %s", key ? key : "-", message);
 }
 
+void log_fpkg_trace_path(const char *key, const char *path) {
+  if (!sm_config_debug_enabled() || !path || path[0] != '/')
+    return;
+  char copy[MAX_PATH];
+  (void)strlcpy(copy, path, sizeof(copy));
+  log_debug("  [FPKG-TRACE] %s: walk %s as euid=%ld", key ? key : "-", path,
+            (long)geteuid());
+  int current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (current < 0) {
+    log_debug("  [FPKG-TRACE]   / -> errno=%d (%s)", errno, strerror(errno));
+    return;
+  }
+  char *cursor = copy + 1;
+  while (cursor && *cursor) {
+    char *slash = strchr(cursor, '/');
+    if (slash)
+      *slash = '\0';
+    int next = openat(current, cursor,
+                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int saved = errno;
+    struct stat st;
+    int lstat_result = fstatat(current, cursor, &st, AT_SYMLINK_NOFOLLOW);
+    int lstat_errno = errno;
+    if (next < 0) {
+      log_debug("  [FPKG-TRACE]   %s -> open errno=%d (%s); lstat=%d errno=%d",
+                cursor, saved, strerror(saved), lstat_result,
+                lstat_result == 0 ? 0 : lstat_errno);
+      close(current);
+      return;
+    }
+    log_debug("  [FPKG-TRACE]   %s -> ok mode=%o uid=%ld", cursor,
+              lstat_result == 0 ? (unsigned)st.st_mode : 0u,
+              lstat_result == 0 ? (long)st.st_uid : -1L);
+    close(current);
+    current = next;
+    cursor = slash ? slash + 1 : NULL;
+  }
+  close(current);
+}
+
 void sm_log_shutdown(void) {
   pthread_mutex_lock(&g_log_mutex);
   if (g_log_file) {
