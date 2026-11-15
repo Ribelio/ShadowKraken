@@ -1252,6 +1252,8 @@ static bool validate_owned_cache_tree(int directory_fd, const char *prefix,
       if (st.st_uid != geteuid() || (st.st_mode & 0022) != 0 ||
           (strcmp(path, "kraken") != 0 &&
            !manifest_has_child_directory(check->manifest, path))) {
+        SM_FPKG_TRACE("tree", "dir rejected: '%s' uid=%d euid=%d mode=%o",
+                       path, (int)st.st_uid, (int)geteuid(), (unsigned)st.st_mode);
         valid = false;
         break;
       }
@@ -1269,6 +1271,8 @@ static bool validate_owned_cache_tree(int directory_fd, const char *prefix,
     }
     if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() || st.st_nlink != 1 ||
         (st.st_mode & 0022) != 0) {
+      SM_FPKG_TRACE("tree", "file rejected: '%s' uid=%d nlink=%d mode=%o",
+                     path, (int)st.st_uid, (int)st.st_nlink, (unsigned)st.st_mode);
       valid = false;
       break;
     }
@@ -1287,6 +1291,10 @@ static bool validate_owned_cache_tree(int directory_fd, const char *prefix,
     owned_cache_file_t *owned = find_owned_cache_file(check->manifest, path);
     if (!owned || owned->seen || st.st_size < 0 ||
         (uint64_t)st.st_size != owned->size) {
+      SM_FPKG_TRACE("tree", "manifest mismatch: '%s' owned=%d seen=%d size=%lld want=%llu",
+                     path, owned != NULL, owned ? owned->seen : 0,
+                     (long long)st.st_size,
+                     (unsigned long long)(owned ? owned->size : 0));
       valid = false;
       break;
     }
@@ -1356,8 +1364,15 @@ static bool validate_generation_owned_tree(int generation_fd,
                find_owned_cache_file(&manifest, "ampr_emu.index") &&
                find_owned_cache_file(&manifest, "ampr_assets.index") &&
                find_owned_cache_file(&manifest, "kraken.image");
-  for (size_t i = 0; valid && i < manifest.count; ++i)
+  SM_FPKG_TRACE("tree", "source=%d image=%d idx=%d/%d/%d valid=%d built=%d done=%d journal=%d kraken=%d",
+                 source_valid, image_valid, index_valid, manifest_valid,
+                 indexes_valid, valid, check.built_seen, check.done_seen,
+                 check.journal_seen, check.kraken_seen);
+  for (size_t i = 0; valid && i < manifest.count; ++i) {
     valid = manifest.files[i].seen;
+    if (!valid)
+      SM_FPKG_TRACE("tree", "manifest file never seen: index %zu", i);
+  }
   free_owned_cache_manifest(&manifest);
   return valid;
 }

@@ -75,4 +75,11 @@ void notify_image_mount_failed(const char *path, int mount_err);
   })
 #endif
 
+
+#ifdef SM_CHECKED_SYSCALLS
+#define SM_FPKG_TRACE(...) log_fpkg_trace(__VA_ARGS__)
+#else
+#define SM_FPKG_TRACE(...) ((void)0)
+#endif
+
 #endif
