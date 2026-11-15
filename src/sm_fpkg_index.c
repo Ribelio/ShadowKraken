@@ -1,6 +1,12 @@
 /* Native AMPRIDX3 / AMPRPAK4 writer, based on the GPL-3.0-or-later
  * Kraken Mount and pinned ampr-emu-ng v0.4.0 format implementations. */
 #include "sm_fpkg_index.h"
+#ifdef SM_CHECKED_SYSCALLS
+void log_fpkg_trace(const char *title_id, const char *fmt, ...);
+#define SM_FPKG_TRACE(...) log_fpkg_trace(__VA_ARGS__)
+#else
+#define SM_FPKG_TRACE(...) ((void)0)
+#endif
 
 #include <errno.h>
 #include <stdlib.h>
@@ -206,9 +212,12 @@ static uint32_t crc32_update(uint32_t crc, const uint8_t *bytes, size_t len) {
   return crc;
 }
 
+#define SM_IDX_FAIL() \
+  (SM_FPKG_TRACE("idx", "reject %s:%d errno=%d", __func__, __LINE__, errno), false)
+
 static bool read_exact_at(int fd, uint64_t offset, void *buffer, size_t size) {
   if (offset > (uint64_t)INT64_MAX || size > (uint64_t)INT64_MAX - offset)
-    return false;
+    return SM_IDX_FAIL();
   uint8_t *bytes = buffer;
   size_t done = 0;
   while (done < size) {
@@ -216,8 +225,11 @@ static bool read_exact_at(int fd, uint64_t offset, void *buffer, size_t size) {
                           (off_t)(offset + done));
     if (count < 0 && errno == EINTR)
       continue;
-    if (count <= 0)
+    if (count <= 0) {
+      SM_FPKG_TRACE("idx", "pread fd=%d off=%llu size=%zu got=%zd errno=%d", fd,
+                    (unsigned long long)(offset + done), size - done, count, errno);
       return false;
+    }
     done += (size_t)count;
   }
   return true;
@@ -229,7 +241,7 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
                                                    sizeof(header)) ||
       memcmp(header, IDX_MAGIC, 8) != 0 || read_le32(header + 8) != 3u ||
       read_le32(header + 12) != IDX_RECORD)
-    return false;
+    return SM_IDX_FAIL();
   uint64_t count = read_le64(header + 16);
   uint64_t path_bytes = read_le64(header + 24);
   uint64_t slots_offset = read_le64(header + 32);
@@ -242,57 +254,57 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
       (slot_count & (slot_count - 1u)) != 0 ||
       (uint64_t)slot_count < count * 2u ||
       count > UINT64_MAX / IDX_RECORD)
-    return false;
+    return SM_IDX_FAIL();
   records_size = count * IDX_RECORD;
   if (records_size > UINT64_MAX - IDX_HEADER ||
       path_bytes > UINT64_MAX - IDX_HEADER - records_size)
-    return false;
+    return SM_IDX_FAIL();
   uint64_t payload_end = IDX_HEADER + records_size + path_bytes;
   uint64_t slots_size = (uint64_t)slot_count * IDX_SLOT;
   if (slots_offset < payload_end || (slots_offset & (IDX_SLOT - 1u)) != 0 ||
       slots_size > UINT64_MAX - slots_offset ||
       slots_offset + slots_size != file_size)
-    return false;
+    return SM_IDX_FAIL();
   uint8_t padding[IDX_SLOT - 1u];
   size_t padding_size = (size_t)(slots_offset - payload_end);
   if (padding_size > sizeof(padding) ||
       (padding_size &&
        !read_exact_at(fd, payload_end, padding, padding_size)))
-    return false;
+    return SM_IDX_FAIL();
   for (size_t i = 0; i < padding_size; ++i)
     if (padding[i] != 0)
-      return false;
+      return SM_IDX_FAIL();
 
   uint8_t record[IDX_RECORD];
   for (uint64_t i = 0; i < count; ++i) {
     if (!read_exact_at(fd, IDX_HEADER + i * IDX_RECORD, record,
                        sizeof(record)))
-      return false;
+      return SM_IDX_FAIL();
     uint32_t path_at = read_le32(record);
     uint32_t path_length = read_le32(record + 4);
     if (path_length == 0 || path_length > MAX_PATH_BYTES ||
         path_at > path_bytes || (uint64_t)path_length + 1u >
                                     path_bytes - path_at)
-      return false;
+      return SM_IDX_FAIL();
     char path[MAX_PATH_BYTES + 1u];
     if (!read_exact_at(fd, IDX_HEADER + records_size + path_at, path,
                        (size_t)path_length + 1u) ||
         path[path_length] != '\0' ||
         memchr(path, '\0', path_length) != NULL || path_length < 7u ||
         memcmp(path, "/app0/", 6u) != 0)
-      return false;
+      return SM_IDX_FAIL();
   }
 
   uint8_t *seen_records = calloc((size_t)count + 1u, 1u);
   if (!seen_records)
-    return false;
+    return SM_IDX_FAIL();
   uint32_t used = 0;
   uint8_t slot[IDX_SLOT];
   for (uint32_t i = 0; i < slot_count; ++i) {
     if (!read_exact_at(fd, slots_offset + (uint64_t)i * IDX_SLOT, slot,
                        sizeof(slot))) {
       free(seen_records);
-      return false;
+      return SM_IDX_FAIL();
     }
     uint64_t hash = read_le64(slot);
     uint32_t record_plus_one = read_le32(slot + 8);
@@ -300,14 +312,14 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
     if (record_plus_one == 0) {
       if (hash != 0 || flags != 0) {
         free(seen_records);
-        return false;
+        return SM_IDX_FAIL();
       }
       continue;
     }
     if (record_plus_one > count || hash == 0 ||
         (flags & ~IDX_SLOT_SHARED) != 0 || seen_records[record_plus_one]) {
       free(seen_records);
-      return false;
+      return SM_IDX_FAIL();
     }
     uint32_t probe = (uint32_t)hash & (slot_count - 1u);
     while (probe != i) {
@@ -316,7 +328,7 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
                          previous_slot, sizeof(previous_slot)) ||
           read_le32(previous_slot + 8) == 0) {
         free(seen_records);
-        return false;
+        return SM_IDX_FAIL();
       }
       probe = (probe + 1u) & (slot_count - 1u);
     }
@@ -325,7 +337,7 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
                              (uint64_t)(record_plus_one - 1u) * IDX_RECORD;
     if (!read_exact_at(fd, record_offset, record, sizeof(record))) {
       free(seen_records);
-      return false;
+      return SM_IDX_FAIL();
     }
     uint32_t path_at = read_le32(record);
     uint32_t path_length = read_le32(record + 4);
@@ -337,7 +349,7 @@ static bool validate_idx_fd(int fd, uint64_t file_size) {
                        (size_t)path_length + 1u) ||
         idx_hash(path, path_length) != hash) {
       free(seen_records);
-      return false;
+      return SM_IDX_FAIL();
     }
     seen_records[record_plus_one] = 1u;
     ++used;
@@ -360,7 +372,7 @@ static bool validate_pak_fd(int fd, uint64_t file_size) {
       read_le32(header + 60) != PAK_FILE_RECORD ||
       read_le32(header + 64) != PAK_CHUNK_RECORD ||
       read_le32(header + 68) != PAK_PACK_RECORD)
-    return false;
+    return SM_IDX_FAIL();
   uint64_t file_count = read_le64(header + 40);
   uint64_t chunk_count = read_le64(header + 48);
   uint64_t files_at = read_le64(header + 72);
@@ -379,30 +391,30 @@ static bool validate_pak_fd(int fd, uint64_t file_size) {
       strings_at != pack_at + PAK_PACK_RECORD ||
       strings_size > UINT64_MAX - strings_at ||
       strings_at + strings_size != file_size)
-    return false;
+    return SM_IDX_FAIL();
 
   uint8_t pack[PAK_PACK_RECORD];
   if (!read_exact_at(fd, pack_at, pack, sizeof(pack)) ||
       read_le64(pack) == 0 || read_le64(pack + 8) < read_le64(pack) ||
       read_le32(pack + 24) != PAK_PACK_IO_PAGE_LAYOUT ||
       read_le32(pack + 28) != PAK_PAGE)
-    return false;
+    return SM_IDX_FAIL();
   uint32_t pack_name_at = read_le32(pack + 16);
   uint32_t pack_name_size = read_le32(pack + 20);
   if ((uint64_t)pack_name_at + pack_name_size + 1u > strings_size ||
       pack_name_size != sizeof("kraken.pkg") - 1u)
-    return false;
+    return SM_IDX_FAIL();
   char pack_name[sizeof("kraken.pkg")];
   if (!read_exact_at(fd, strings_at + pack_name_at, pack_name,
                      sizeof(pack_name)) ||
       memcmp(pack_name, "kraken.pkg", sizeof(pack_name)) != 0)
-    return false;
+    return SM_IDX_FAIL();
 
   uint8_t file_record[PAK_FILE_RECORD];
   for (uint64_t i = 0; i < file_count; ++i) {
     if (!read_exact_at(fd, files_at + i * PAK_FILE_RECORD, file_record,
                        sizeof(file_record)))
-      return false;
+      return SM_IDX_FAIL();
     uint32_t first_chunk = read_le32(file_record + 24);
     uint32_t file_chunks = read_le32(file_record + 28);
     uint32_t path_at = read_le32(file_record + 32);
@@ -410,19 +422,19 @@ static bool validate_pak_fd(int fd, uint64_t file_size) {
     if (first_chunk > chunk_count || file_chunks > chunk_count - first_chunk ||
         path_length == 0 || path_length > MAX_PATH_BYTES ||
         (uint64_t)path_at + path_length + 1u > strings_size)
-      return false;
+      return SM_IDX_FAIL();
     char path[MAX_PATH_BYTES + 1u];
     if (!read_exact_at(fd, strings_at + path_at, path,
                        (size_t)path_length + 1u) ||
         path[path_length] != '\0' || memchr(path, '\0', path_length) != NULL ||
         pak_hash(path, path_length) != read_le64(file_record))
-      return false;
+      return SM_IDX_FAIL();
   }
 
   uint32_t expected_header_crc = read_le32(header + PAK_HEADER_CRC_AT);
   memset(header + PAK_HEADER_CRC_AT, 0, 4u);
   if (crc32_bytes(header, sizeof(header)) != expected_header_crc)
-    return false;
+    return SM_IDX_FAIL();
   uint8_t chunk[64u * 1024u];
   uint64_t offset = PAK_HEADER;
   uint32_t crc = UINT32_MAX;
@@ -431,19 +443,21 @@ static bool validate_pak_fd(int fd, uint64_t file_size) {
                         ? sizeof(chunk)
                         : (size_t)(file_size - offset);
     if (!read_exact_at(fd, offset, chunk, amount))
-      return false;
+      return SM_IDX_FAIL();
     crc = crc32_update(crc, chunk, amount);
     offset += amount;
   }
-  return ~crc == read_le32(header + PAK_PAYLOAD_CRC_AT);
+  if (~crc != read_le32(header + PAK_PAYLOAD_CRC_AT))
+    return SM_IDX_FAIL();
+  return true;
 }
 
 bool sm_fpkg_index_validate_fd(int fd, bool manifest) {
   if (fd < 0)
-    return false;
+    return SM_IDX_FAIL();
   struct stat st;
   if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0)
-    return false;
+    return SM_IDX_FAIL();
   uint64_t file_size = (uint64_t)st.st_size;
   return manifest ? validate_pak_fd(fd, file_size)
                    : validate_idx_fd(fd, file_size);
@@ -452,15 +466,15 @@ bool sm_fpkg_index_validate_fd(int fd, bool manifest) {
 bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd) {
   if (!sm_fpkg_index_validate_fd(index_fd, false) ||
       !sm_fpkg_index_validate_fd(manifest_fd, true))
-    return false;
+    return SM_IDX_FAIL();
   uint8_t index_header[IDX_HEADER], manifest_header[PAK_HEADER];
   if (!read_exact_at(index_fd, 0, index_header, sizeof(index_header)) ||
       !read_exact_at(manifest_fd, 0, manifest_header,
                      sizeof(manifest_header)))
-    return false;
+    return SM_IDX_FAIL();
   uint64_t count = read_le64(index_header + 16);
   if (count != read_le64(manifest_header + 40))
-    return false;
+    return SM_IDX_FAIL();
   uint64_t index_paths_at = IDX_HEADER + count * IDX_RECORD;
   uint64_t manifest_files_at = read_le64(manifest_header + 72);
   uint64_t manifest_strings_at = read_le64(manifest_header + 96);
@@ -471,7 +485,7 @@ bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd) {
         !read_exact_at(manifest_fd,
                        manifest_files_at + i * PAK_FILE_RECORD,
                        manifest_record, sizeof(manifest_record)))
-      return false;
+      return SM_IDX_FAIL();
     uint32_t index_path_at = read_le32(index_record);
     uint32_t index_path_length = read_le32(index_record + 4);
     uint32_t manifest_path_at = read_le32(manifest_record + 32);
@@ -479,7 +493,7 @@ bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd) {
     if (index_path_length != manifest_path_length ||
         read_le64(index_record + 8) != read_le64(manifest_record + 8) ||
         read_le64(index_record + 16) != read_le64(manifest_record + 16))
-      return false;
+      return SM_IDX_FAIL();
     char index_path[MAX_PATH_BYTES + 1u];
     char manifest_path[MAX_PATH_BYTES + 1u];
     if (!read_exact_at(index_fd, index_paths_at + index_path_at, index_path,
@@ -489,7 +503,7 @@ bool sm_fpkg_index_validate_pair_fds(int index_fd, int manifest_fd) {
                        manifest_path, (size_t)manifest_path_length + 1u) ||
         memcmp(index_path, manifest_path,
                (size_t)index_path_length + 1u) != 0)
-      return false;
+      return SM_IDX_FAIL();
   }
   return true;
 }
