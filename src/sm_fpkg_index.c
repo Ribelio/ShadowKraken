@@ -435,19 +435,28 @@ static bool validate_pak_fd(int fd, uint64_t file_size) {
   memset(header + PAK_HEADER_CRC_AT, 0, 4u);
   if (crc32_bytes(header, sizeof(header)) != expected_header_crc)
     return SM_IDX_FAIL();
-  uint8_t chunk[64u * 1024u];
+  /* Heap, not stack: this runs on ShellCore launch threads whose stacks are
+   * too small for a 64 KiB buffer; pread into it fails with EFAULT there. */
+  enum { CRC_CHUNK = 64u * 1024u };
+  uint8_t *chunk = malloc(CRC_CHUNK);
+  if (!chunk)
+    return SM_IDX_FAIL();
   uint64_t offset = PAK_HEADER;
   uint32_t crc = UINT32_MAX;
+  bool read_ok = true;
   while (offset < file_size) {
-    size_t amount = file_size - offset > sizeof(chunk)
-                        ? sizeof(chunk)
+    size_t amount = file_size - offset > CRC_CHUNK
+                        ? CRC_CHUNK
                         : (size_t)(file_size - offset);
-    if (!read_exact_at(fd, offset, chunk, amount))
-      return SM_IDX_FAIL();
+    if (!read_exact_at(fd, offset, chunk, amount)) {
+      read_ok = false;
+      break;
+    }
     crc = crc32_update(crc, chunk, amount);
     offset += amount;
   }
-  if (~crc != read_le32(header + PAK_PAYLOAD_CRC_AT))
+  free(chunk);
+  if (!read_ok || ~crc != read_le32(header + PAK_PAYLOAD_CRC_AT))
     return SM_IDX_FAIL();
   return true;
 }
