@@ -28,6 +28,10 @@
 
 #include <ps5/kernel.h>
 
+#ifdef SM_CHECKED_SYSCALLS
+#include "sm_syscall_checked.h"
+#endif
+
 typedef struct {
   uint32_t app_id;
   uint64_t unknown1;

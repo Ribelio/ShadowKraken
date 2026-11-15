@@ -18,6 +18,7 @@ SMB_LIB := $(HOMEBREW_ROOT)/lib/libsmb2.a
 CFLAGS := -O3 -flto=thin -DNDEBUG -ffunction-sections -fdata-sections -Wall -Wextra -Wstrict-prototypes -Wmissing-prototypes -Werror=strict-prototypes -Werror=missing-prototypes -D_BSD_SOURCE -std=gnu11 -Iinclude -Isrc
 CFLAGS += -DSHADOWMOUNT_VERSION=\"$(VERSION_TAG)\"
 CFLAGS += -DSM_VFS_ENABLED
+CFLAGS += -DSM_CHECKED_SYSCALLS
 CFLAGS += -I$(JSON_C_PREFIX)/include
 
 # Linker
