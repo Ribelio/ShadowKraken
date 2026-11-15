@@ -471,19 +471,19 @@ static bool prepare_title_runtime(const char *title_id,
     if (sm_fpkg_cache_read_generation_info(
             SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path,
             &generation_info) != SM_FPKG_OK) {
-      log_fpkg_trace(title_id, "runtime: generation info unreadable errno=%d", errno);
+      log_debug("  [LAUNCH-TRACE] %s: generation info unreadable errno=%d", title_id, errno);
       errno = ESTALE;
       return false;
     }
     if (!restore_cached_fpkg_source(title_id, source_path)) {
-      log_fpkg_trace(title_id, "runtime: restore cached source failed errno=%d", errno);
+      log_debug("  [LAUNCH-TRACE] %s: restore cached source failed errno=%d", title_id, errno);
       errno = ESTALE;
       return false;
     }
   }
   if (!prepare_image_source(title_id, source_path,
                             mount_read_only_override)) {
-    log_fpkg_trace(title_id, "runtime: prepare_image_source failed errno=%d", errno);
+    log_debug("  [LAUNCH-TRACE] %s: prepare_image_source failed errno=%d", title_id, errno);
     return false;
   }
   sm_fakelib_prepare_title_cache(title_id, source_path);
@@ -494,7 +494,7 @@ static bool prepare_title_runtime(const char *title_id,
   if (ready)
     ready = mount_backport_overlay_for_title(source_path, title_id, NULL, NULL);
   if (!title_mounted || !ready)
-    log_fpkg_trace(title_id, "runtime: nullfs=%d overlay=%d errno=%d source=%s",
+    log_debug("  [LAUNCH-TRACE] %s: nullfs=%d overlay=%d errno=%d source=%s", title_id,
                    title_mounted, ready, errno, source_path);
   if (title_mounted && !ready)
     (void)unmount_title_runtime_layers(title_id);
@@ -548,7 +548,7 @@ static int mount_managed_title_runtime(const char *title_id,
   if (mount_read_only_override && !is_under_image_mount_base(source_path))
     return ENOTSUP;
   if (!wait_for_resumed_runtime_source(title_id, source_path)) {
-    log_fpkg_trace(title_id, "runtime: resumed source not ready");
+    log_debug("  [LAUNCH-TRACE] %s: resumed source not ready", title_id);
     return EIO;
   }
 
