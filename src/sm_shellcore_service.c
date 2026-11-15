@@ -471,17 +471,21 @@ static bool prepare_title_runtime(const char *title_id,
     if (sm_fpkg_cache_read_generation_info(
             SM_FPKG_CACHE_DEFAULT_ROOT, title_id, source_path,
             &generation_info) != SM_FPKG_OK) {
+      log_fpkg_trace(title_id, "runtime: generation info unreadable errno=%d", errno);
       errno = ESTALE;
       return false;
     }
     if (!restore_cached_fpkg_source(title_id, source_path)) {
+      log_fpkg_trace(title_id, "runtime: restore cached source failed errno=%d", errno);
       errno = ESTALE;
       return false;
     }
   }
   if (!prepare_image_source(title_id, source_path,
-                            mount_read_only_override))
+                            mount_read_only_override)) {
+    log_fpkg_trace(title_id, "runtime: prepare_image_source failed errno=%d", errno);
     return false;
+  }
   sm_fakelib_prepare_title_cache(title_id, source_path);
   runtime_mount_state_lock();
   bool title_mounted = !runtime_sleep_mode_active() &&
@@ -489,6 +493,9 @@ static bool prepare_title_runtime(const char *title_id,
   bool ready = title_mounted;
   if (ready)
     ready = mount_backport_overlay_for_title(source_path, title_id, NULL, NULL);
+  if (!title_mounted || !ready)
+    log_fpkg_trace(title_id, "runtime: nullfs=%d overlay=%d errno=%d source=%s",
+                   title_mounted, ready, errno, source_path);
   if (title_mounted && !ready)
     (void)unmount_title_runtime_layers(title_id);
   runtime_mount_state_unlock();
@@ -540,8 +547,10 @@ static int mount_managed_title_runtime(const char *title_id,
     return allow_unmanaged ? 0 : ENOENT;
   if (mount_read_only_override && !is_under_image_mount_base(source_path))
     return ENOTSUP;
-  if (!wait_for_resumed_runtime_source(title_id, source_path))
+  if (!wait_for_resumed_runtime_source(title_id, source_path)) {
+    log_fpkg_trace(title_id, "runtime: resumed source not ready");
     return EIO;
+  }
 
   bool claimed = false;
   int claim_status =
