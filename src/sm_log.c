@@ -310,6 +310,28 @@ void log_debug(const char *fmt, ...) {
   va_end(args);
 }
 
+void log_fpkg_trace(const char *key, const char *fmt, ...) {
+  if (!sm_config_debug_enabled())
+    return;
+  static pthread_mutex_t trace_mutex = PTHREAD_MUTEX_INITIALIZER;
+  static char last[512];
+  char message[400];
+  char combined[512];
+  va_list args;
+  va_start(args, fmt);
+  (void)vsnprintf(message, sizeof(message), fmt, args);
+  va_end(args);
+  (void)snprintf(combined, sizeof(combined), "%s|%s", key ? key : "-",
+                 message);
+  pthread_mutex_lock(&trace_mutex);
+  bool repeated = strcmp(combined, last) == 0;
+  if (!repeated)
+    (void)strlcpy(last, combined, sizeof(last));
+  pthread_mutex_unlock(&trace_mutex);
+  if (!repeated)
+    log_debug("  [FPKG-TRACE] %s: %s", key ? key : "-", message);
+}
+
 void sm_log_shutdown(void) {
   pthread_mutex_lock(&g_log_mutex);
   if (g_log_file) {

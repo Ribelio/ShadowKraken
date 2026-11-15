@@ -9,6 +9,9 @@ typedef struct sm_error sm_error_t;
 
 // Write a formatted line to the debug log.
 void log_debug(const char *fmt, ...);
+// Log why a native FPKG candidate was skipped, once per key until the reason
+// changes: the scanner revisits a title every few seconds.
+void log_fpkg_trace(const char *key, const char *fmt, ...);
 // Prepare notification assets such as the packaged icon file.
 void sm_notifications_init(void);
 // Flush and close persistent log resources.

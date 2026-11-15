@@ -554,6 +554,10 @@ static void update_registered_title_snd0info(const char *title_id) {
 }
 void notify_system_l10n(sm_l10n_key_t key, ...) { (void)key; }
 void log_debug(const char *format, ...) { (void)format; }
+void log_fpkg_trace(const char *key, const char *format, ...) {
+  (void)key;
+  (void)format;
+}
 bool mount_sandbox_directory_at(const char *title_id, const char *app0_path,
                                 const char *target_suffix,
                                 const char *source_path, const char *label,

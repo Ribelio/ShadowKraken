@@ -726,24 +726,6 @@ static bool try_collect_candidate_for_directory(
 }
 
 
-// Trace why a native FPKG candidate is skipped; each reason is logged once
-// per title until it changes, so a 15 s scan loop does not flood the log.
-#include <stdarg.h>
-static void fpkg_trace(const char *key, const char *fmt, ...) {
-  static char last[512];
-  char message[400];
-  char combined[512];
-  va_list args;
-  va_start(args, fmt);
-  (void)vsnprintf(message, sizeof(message), fmt, args);
-  va_end(args);
-  (void)snprintf(combined, sizeof(combined), "%s|%s", key ? key : "-", message);
-  if (strcmp(combined, last) == 0)
-    return;
-  (void)strlcpy(last, combined, sizeof(last));
-  log_debug("  [FPKG-TRACE] %s: %s", key ? key : "-", message);
-}
-
 static bool try_collect_candidate_for_fpkg(
     const char *full_path, scan_candidate_t *candidates, int max_candidates,
     int *candidate_count, const scan_app_db_context_t *app_db,
@@ -767,10 +749,10 @@ static bool try_collect_candidate_for_fpkg(
   sm_pkg_info_t package_info = {0};
   bool parsed = sm_pkg_parse_fd(full_path, fd, &package_info);
   if (!parsed)
-    fpkg_trace(filename, "package header not parsed");
+    log_fpkg_trace(filename, "package header not parsed");
   if (parsed && (package_info.pkg_kind != PKG_KIND_BASE ||
                  !package_info.pkg_classification_confident)) {
-    fpkg_trace(filename, "not a confident base package (kind=%d confident=%d)",
+    log_fpkg_trace(filename, "not a confident base package (kind=%d confident=%d)",
                (int)package_info.pkg_kind,
                (int)package_info.pkg_classification_confident);
     close(fd);
@@ -785,7 +767,7 @@ static bool try_collect_candidate_for_fpkg(
       log_debug("  [FPKG] source rejected during scan: %s status=%d",
                 full_path, (int)fpkg_status);
     else if (parsed)
-      fpkg_trace(filename, "reader: unsupported package layout");
+      log_fpkg_trace(filename, "reader: unsupported package layout");
     if (fpkg)
       sm_fpkg_close(fpkg);
     close(fd);
@@ -801,18 +783,18 @@ static bool try_collect_candidate_for_fpkg(
   note_game_cache_source_seen(full_path, package_info.title_id,
                               package_info.title_name);
   if (sm_shellcore_title_is_protected(package_info.title_id)) {
-    fpkg_trace(package_info.title_id, "title is protected by the ShellCore service");
+    log_fpkg_trace(package_info.title_id, "title is protected by the ShellCore service");
     return true;
   }
   if (is_blocked_ppsa_title(app_db->blocked_ppsa_titles,
                             app_db->blocked_ppsa_titles_ready,
                             package_info.title_id)) {
     request_blocked_ppsa_uninstall(package_info.title_id, full_path);
-    fpkg_trace(package_info.title_id, "title is on the blocked PPSA uninstall list");
+    log_fpkg_trace(package_info.title_id, "title is on the blocked PPSA uninstall list");
     return true;
   }
   if (!app_db->titles_ready) {
-    fpkg_trace(package_info.title_id, "app.db title list not ready");
+    log_fpkg_trace(package_info.title_id, "app.db title list not ready");
     if (unstable_found_out)
       *unstable_found_out = true;
     return true;
@@ -837,7 +819,7 @@ static bool try_collect_candidate_for_fpkg(
           backport_path[0] ? backport_path : NULL, active_generation);
   if (generation_status != SM_FPKG_OK &&
       generation_status != SM_FPKG_UNSUPPORTED) {
-    fpkg_trace(package_info.title_id, "cache generation lookup status=%d",
+    log_fpkg_trace(package_info.title_id, "cache generation lookup status=%d",
                (int)generation_status);
     if (unstable_found_out)
       *unstable_found_out = true;
@@ -898,21 +880,21 @@ static bool try_collect_candidate_for_fpkg(
   }
   if ((!in_app_db && is_title_install_pending(package_info.title_id)) ||
       (!in_app_db && was_register_attempted(package_info.title_id))) {
-    fpkg_trace(package_info.title_id,
+    log_fpkg_trace(package_info.title_id,
                "install pending or registration already attempted");
     return true;
   }
   if (get_failed_mount_attempts(package_info.title_id) >=
       MAX_FAILED_MOUNT_ATTEMPTS) {
-    fpkg_trace(package_info.title_id, "failed attempts reached the retry limit");
+    log_fpkg_trace(package_info.title_id, "failed attempts reached the retry limit");
     return true;
   }
   if (defer_full_candidate_batch(*candidate_count, max_candidates,
                                  unstable_found_out)) {
-    fpkg_trace(package_info.title_id, "candidate batch full, deferred");
+    log_fpkg_trace(package_info.title_id, "candidate batch full, deferred");
     return true;
   }
-  fpkg_trace(package_info.title_id,
+  log_fpkg_trace(package_info.title_id,
              "queued as candidate (installed=%d in_app_db=%d generation=%d)",
              (int)installed, (int)in_app_db, (int)generation_status);
 
@@ -953,7 +935,7 @@ static bool collect_candidate_fpkg_visit(const char *package_path,
                                          void *ctx_ptr) {
   (void)depth_from_root;
   if (!sm_game_lifecycle_background_title(NULL)) {
-    fpkg_trace(package_name, "game lifecycle blocks background work");
+    log_fpkg_trace(package_name, "game lifecycle blocks background work");
     return false;
   }
   collect_candidates_walk_ctx_t *ctx = ctx_ptr;

@@ -276,24 +276,6 @@ static bool fpkg_cache_build_cancelled(void *ctx) {
 }
 
 
-// Trace why a native FPKG candidate is skipped; each reason is logged once
-// per title until it changes, so a 15 s scan loop does not flood the log.
-#include <stdarg.h>
-static void fpkg_trace(const char *key, const char *fmt, ...) {
-  static char last[512];
-  char message[400];
-  char combined[512];
-  va_list args;
-  va_start(args, fmt);
-  (void)vsnprintf(message, sizeof(message), fmt, args);
-  va_end(args);
-  (void)snprintf(combined, sizeof(combined), "%s|%s", key ? key : "-", message);
-  if (strcmp(combined, last) == 0)
-    return;
-  (void)strlcpy(last, combined, sizeof(last));
-  log_debug("  [FPKG-TRACE] %s: %s", key ? key : "-", message);
-}
-
 static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
                                    char previous_generation[MAX_PATH]) {
   previous_generation[0] = '\0';
@@ -303,7 +285,7 @@ static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
     return false;
   }
   if (!sm_shellcore_try_begin_external_mutation()) {
-    fpkg_trace(candidate->title_id,
+    log_fpkg_trace(candidate->title_id,
                "busy: ShellCore mutation, launch or release in progress");
     errno = EBUSY;
     return false;
@@ -315,13 +297,13 @@ static bool prepare_fpkg_candidate(scan_candidate_t *candidate,
   do {
     if (should_stop_requested() || runtime_sleep_mode_active() ||
         sm_shellcore_title_is_protected(candidate->title_id)) {
-      fpkg_trace(candidate->title_id, "busy: stop=%d sleep=%d protected=%d",
+      log_fpkg_trace(candidate->title_id, "busy: stop=%d sleep=%d protected=%d",
                  (int)should_stop_requested(), (int)runtime_sleep_mode_active(),
                  (int)sm_shellcore_title_is_protected(candidate->title_id));
       errno = EBUSY;
       break;
     }
-    fpkg_trace(candidate->title_id, "preparing cache from %s", candidate->path);
+    log_fpkg_trace(candidate->title_id, "preparing cache from %s", candidate->path);
     source_fd = open(candidate->path,
                      O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (source_fd < 0)
@@ -687,7 +669,7 @@ void process_scan_candidates(const scan_candidate_t *candidates,
                              int candidate_count) {
   if (runtime_sleep_mode_active()) {
     if (candidate_count > 0)
-      fpkg_trace("candidates", "sleep mode active; %d not processed", candidate_count);
+      log_fpkg_trace("candidates", "sleep mode active; %d not processed", candidate_count);
     return;
   }
 
@@ -696,7 +678,7 @@ void process_scan_candidates(const scan_candidate_t *candidates,
   for (int i = 0; i < candidate_count; i++) {
     if (should_stop_requested() || runtime_sleep_mode_active() ||
         !sm_game_lifecycle_background_title(NULL)) {
-      fpkg_trace("candidates", "stopped at %d/%d: stop=%d sleep=%d background_blocked=%d",
+      log_fpkg_trace("candidates", "stopped at %d/%d: stop=%d sleep=%d background_blocked=%d",
                  i, candidate_count, (int)should_stop_requested(),
                  (int)runtime_sleep_mode_active(),
                  (int)!sm_game_lifecycle_background_title(NULL));
