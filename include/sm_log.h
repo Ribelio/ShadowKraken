@@ -47,6 +47,9 @@ void notify_image_mount_failed(const char *path, int mount_err);
 
 
 /* Diagnostic: log where an FPKG I/O status is produced, keeping errno. */
+#ifndef SM_CHECKED_SYSCALLS
+#define SM_FPKG_IO_AT() SM_FPKG_IO
+#else
 #define SM_FPKG_IO_AT()                                                       \
   ({                                                                          \
     int sm_io_errno_ = errno;                                                 \
@@ -55,5 +58,6 @@ void notify_image_mount_failed(const char *path, int mount_err);
     errno = sm_io_errno_;                                                     \
     SM_FPKG_IO;                                                               \
   })
+#endif
 
 #endif
