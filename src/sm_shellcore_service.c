@@ -1450,7 +1450,17 @@ bool sm_shellcore_service_start(void) {
   g_service.pending_sandbox_ready_handled = false;
   g_service.external_mutation_in_progress = false;
   g_service.releasing_title_id[0] = '\0';
-  int rc = pthread_create(&g_service.thread, NULL, service_thread_main, NULL);
+  /* Launch preparation runs here: deep calls with many MAX_PATH buffers. The
+   * platform default stack is too small (pread into a 64 KiB stack buffer
+   * failed with EFAULT on 13.40), so size it explicitly. */
+  pthread_attr_t attr;
+  int rc = pthread_attr_init(&attr);
+  if (rc == 0) {
+    rc = pthread_attr_setstacksize(&attr, SM_WORKER_STACK_SIZE);
+    if (rc == 0)
+      rc = pthread_create(&g_service.thread, &attr, service_thread_main, NULL);
+    (void)pthread_attr_destroy(&attr);
+  }
   if (rc != 0) {
     close(fd);
     g_service.listen_fd = -1;

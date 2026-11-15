@@ -1187,9 +1187,15 @@ bool start_game_lifecycle_watcher(void) {
   g_game_lifecycle_start_success = false;
   pthread_mutex_unlock(&g_game_lifecycle_start_mutex);
 
-  int rc =
-      pthread_create(&g_game_lifecycle_thread, NULL, game_lifecycle_watcher_main,
-                     NULL);
+  pthread_attr_t attr;
+  int rc = pthread_attr_init(&attr);
+  if (rc == 0) {
+    rc = pthread_attr_setstacksize(&attr, SM_WORKER_STACK_SIZE);
+    if (rc == 0)
+      rc = pthread_create(&g_game_lifecycle_thread, &attr,
+                          game_lifecycle_watcher_main, NULL);
+    (void)pthread_attr_destroy(&attr);
+  }
   if (rc != 0) {
     log_debug("  [GAME] watcher start failed: %s", strerror(rc));
     close_game_lifecycle_wake_pipe();

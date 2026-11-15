@@ -144,16 +144,18 @@ static bool copy_icon_file(const char *source_path, const char *target_path) {
     (void)fclose(source);
     return false;
   }
-  unsigned char buffer[32768];
+  enum { COPY_CHUNK = 32768 };
+  unsigned char *buffer = malloc(COPY_CHUNK);
   size_t length;
-  bool copied = true;
-  while ((length = fread(buffer, 1, sizeof(buffer), source)) > 0) {
+  bool copied = buffer != NULL;
+  while (copied && (length = fread(buffer, 1, COPY_CHUNK, source)) > 0) {
     if (should_stop_requested() || runtime_sleep_mode_active() ||
         fwrite(buffer, 1, length, target) != length) {
       copied = false;
       break;
     }
   }
+  free(buffer);
   if (ferror(source))
     copied = false;
   if (fclose(source) != 0)

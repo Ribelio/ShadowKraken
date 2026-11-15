@@ -70,4 +70,7 @@
 #define MAX_API_BIND_ADDRESS 16
 #define MAX_PARAM_JSON_SIZE (1024u * 1024u)
 
+/* Stack for threads that prepare and launch titles. */
+#define SM_WORKER_STACK_SIZE (1024u * 1024u)
+
 #endif

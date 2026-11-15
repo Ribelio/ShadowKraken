@@ -592,6 +592,22 @@ static void repair_module_case_for_source(const char *path) {
       goto cleanup;
     // link() publishes the new name atomically without replacing another file.
     if (link(file->path, target) != 0) {
+      int link_errno = errno;
+      if (link_errno == EOPNOTSUPP || link_errno == ENOTSUP) {
+        /* PS5 /data (nullfs) has no hard links: rename when the name is free. */
+        struct stat existing;
+        if (lstat(target, &existing) == 0) {
+          errno = EEXIST;
+        } else if (errno == ENOENT && rename(file->path, target) == 0) {
+          (void)strlcpy(file->path, target, sizeof(file->path));
+          if (lstat(file->path, &file->st) != 0)
+            goto cleanup;
+          ++fixed;
+          continue;
+        }
+      } else {
+        errno = link_errno;
+      }
       if (errno == EEXIST) {
         ++conflicts;
       } else {
