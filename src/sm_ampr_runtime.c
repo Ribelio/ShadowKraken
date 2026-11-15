@@ -251,7 +251,28 @@ static int install_bundled_runtime(const char *fallback_root,
     return -1;
   }
 
-  if (link(temporary_path, runtime_path) != 0) {
+  int linked = link(temporary_path, runtime_path);
+  if (linked != 0 && (errno == EOPNOTSUPP || errno == ENOTSUP)) {
+    /* PS5 /data (nullfs) has no hard links. Every installer writes the same
+     * bundled bytes, so publish by rename when the name is still free. */
+    struct stat existing;
+    if (lstat(runtime_path, &existing) == 0) {
+      (void)unlink(temporary_path);
+      present = validate_runtime_file(runtime_path);
+      return present > 0 ? 0 : -1;
+    }
+    if (errno != ENOENT || rename(temporary_path, runtime_path) != 0) {
+      saved_errno = errno;
+      (void)unlink(temporary_path);
+      errno = saved_errno;
+      return -1;
+    }
+    if (!sync_directory(runtime_directory))
+      return -1;
+    present = validate_runtime_file(runtime_path);
+    return present == 1 ? 0 : -1;
+  }
+  if (linked != 0) {
     saved_errno = errno;
     (void)unlink(temporary_path);
     if (saved_errno != EEXIST) {
