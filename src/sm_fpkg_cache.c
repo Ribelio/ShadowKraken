@@ -2376,8 +2376,23 @@ static int rename_noreplace(int from_fd, const char *from, int to_fd,
   if (S_ISREG(source.st_mode)) {
     if (source.st_uid != geteuid() || source.st_nlink != 1 ||
         (source.st_mode & 0022) != 0) { errno = EPERM; return -1; }
-    if (linkat(from_fd, from, to_fd, to, 0) != 0)
-      return -1;
+    if (linkat(from_fd, from, to_fd, to, 0) != 0) {
+      /* PS5 /data (nullfs) has no hard links: EOPNOTSUPP. The title
+       * directory is private and held under its lock, so a free name stays
+       * free until the rename. */
+      if (errno != EOPNOTSUPP && errno != ENOTSUP)
+        return -1;
+      struct stat existing;
+      if (fstatat(to_fd, to, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+        errno = EEXIST;
+        return -1;
+      }
+      if (errno != ENOENT)
+        return -1;
+      if (renameat(from_fd, from, to_fd, to) != 0)
+        return -1;
+      return fsync(to_fd);
+    }
     if (fsync(to_fd) != 0)
       return -1;
     return unlinkat(from_fd, from, 0);
