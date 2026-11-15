@@ -1,4 +1,4 @@
-# ShadowMountPlus main configuration: /data/shadowmount/config.ini
+# ShadowKraken main configuration: /data/shadowmount/config.ini
 # Keep [config] version. Uncomment only settings you want to override.
 # Individual game/image settings belong in profiles.ini (see profiles.ini.example).
 # Boolean values: on/off, true/false, yes/no, 1/0.
@@ -61,6 +61,11 @@ version = 2
 # remove_with_dlc = off
 # Delay: 1..86400 seconds.
 # remove_delay_seconds = 300
+
+[fpkg]
+# Enables scanning and lifecycle integration for supported plaintext debug FPKG.
+# Enabled by default; set off to disable. Platform checks remain in force.
+direct_mount = on
 
 [fakelib]
 # Sandbox fakelib overlays. Disable the standalone BackPork payload when enabled.

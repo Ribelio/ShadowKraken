@@ -21,7 +21,6 @@ static uintptr_t kernel_dynlib_dlsym(pid_t pid, uint32_t handle,
   assert(pid == current_pid && handle == 1 && name);
   return 0x900000;
 }
-static int sceAppInstUtilAppInstallAll(const char *path);
 static int mock_kill(pid_t pid, int sig) {
   assert(pid == current_pid && sig == 0);
   return 0;
@@ -106,7 +105,7 @@ bool sm_remote_process_write(pid_t pid, uintptr_t address, const void *buffer,
   memcpy(memory + offset, buffer, size);
   return true;
 }
-static int sceAppInstUtilAppInstallAll(const char *path) {
+int sceAppInstUtilAppInstallAll(void *path) {
   assert(path == NULL && !attached && hook_installed(current_pid, 2));
   assert(memory[remote_bridge_symbol(sm_shellcore_bridge_install_armed) -
                 0x100000] == 1);

@@ -17,6 +17,7 @@
 #define SM_API_ROUTE_GAME_INFO "/api/v1/games/info"
 #define SM_API_ROUTE_GAME_FAKELIB "/api/v1/games/fakelib"
 #define SM_API_ROUTE_GAME_ICON "/api/v1/games/icon"
+#define SM_API_ROUTE_GAME_BACKGROUND "/api/v1/games/background"
 #define SM_API_ROUTE_MOUNT "/api/v1/games/mount"
 #define SM_API_ROUTE_UNMOUNT "/api/v1/games/unmount"
 #define SM_API_ROUTE_UNINSTALL "/api/v1/games/uninstall"

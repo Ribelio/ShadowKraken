@@ -1,53 +1,24 @@
 ---
 name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
-
----
-
----
-name: Bug Report
-about: Create a report to help us improve ShadowMountPlus
-title: "[BUG] Short description of the issue"
+about: Report a problem with ShadowKraken
+title: "[Bug] "
 labels: bug
-assignees: ''
 ---
 
-**Description**
-A clear and concise description of what the bug is.
+## What happened?
 
-Please answer the following questions to help us diagnose the issue:
+Describe the problem, what you expected, and how to reproduce it.
 
-**Software Version**
-- **ShadowMountPlus Version:** 
+## Environment
 
-- **Path to the game that isn't working:**
-  - **Image Type:**
-  - [ ] .fpkg
-  - [ ] .exfat image
+- ShadowKraken release or commit:
+- PS5 firmware and jailbreak environment:
+- Source format: folder, `.ffpkg`, `.exfat`, `.ffpfs`, `.ffpfsc` or `.pkg`:
+- Source location: internal storage, USB or extended storage:
+- Relevant backport, fakelib or configuration settings:
 
-- **How was this image created?**
-  - **Does it work with any other software?**
-  - **Firmware Version & Backports:**
-  **Itemzflow History**
-- **Has Itemzflow been used for these games before?**
-  - [ ] Yes
-  - [ ] No
+## Diagnostics
 
-- **If YES: Did you delete the game shortcuts using Itemzflow BEFORE installing ShadowMountPlus?**
-  - [ ] Yes, I deleted them
-  - [ ] No, I did not delete them
-  - [ ] N/A
-
-**Debug Log**
-Please attach the `debug.log` file. You can drag and drop the file here, or copy and paste the content inside the spoiler block below.
-
-<details>
-<summary>Click to expand debug.log content</summary>
-
-```text
-PASTE YOUR LOG HERE
-```
-</details>
+Include relevant notifications and excerpts from `/data/shadowmount/debug.log`.
+Remove passwords, network credentials and other private information before
+sharing logs. Do not upload game packages or copyrighted game files.

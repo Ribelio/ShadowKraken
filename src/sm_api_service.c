@@ -14,6 +14,7 @@
 #include "sm_appdb.h"
 #include "sm_config_mount.h"
 #include "sm_filesystem.h"
+#include "sm_fpkg_cache.h"
 #include "sm_game_cache.h"
 #include "sm_game_lifecycle.h"
 #include "sm_gameinfo.h"
@@ -63,8 +64,8 @@
 
 extern unsigned char web_index_html[];
 extern unsigned int web_index_html_len;
-extern unsigned char smp_icon_png[];
-extern unsigned int smp_icon_png_len;
+extern unsigned char assets_shadowkraken_logo_png[];
+extern unsigned int assets_shadowkraken_logo_png_len;
 
 int sceKernelConvertUtcToLocaltime(time_t utc, time_t *local, void *timezone,
                                   int32_t *dst_seconds);
@@ -1049,7 +1050,40 @@ typedef struct {
   uint64_t usb_mount_id;
 } game_source_info_t;
 
+static bool game_source_matches_storage_path(const game_source_info_t *source,
+                                             const char *path) {
+  return source && path && path[0] &&
+         (strcmp(source->physical_path, path) == 0 ||
+          strcmp(source->runtime_path, path) == 0);
+}
+
 static int resolve_browser_delete_source(const char *path, game_source_info_t *source);
+
+static bool game_uses_fpkg_generation(const char *title_id) {
+  char path[MAX_PATH];
+  return read_mount_link(title_id, path, sizeof(path)) &&
+         path_matches_root_or_child(path, SM_FPKG_CACHE_DEFAULT_ROOT);
+}
+
+static bool resolve_fpkg_storage_source_path(const char *title_id,
+                                             const char *generation_path,
+                                             char source_path[MAX_PATH]) {
+  sm_fpkg_cache_generation_info_t generation;
+  if (sm_fpkg_cache_read_generation_info(
+          SM_FPKG_CACHE_DEFAULT_ROOT, title_id, generation_path,
+          &generation) != SM_FPKG_OK || !generation.source_path[0]) {
+    errno = ESTALE;
+    return false;
+  }
+  if (!generation.source_matches_snapshot &&
+      (!is_under_image_mount_base(generation.source_path) ||
+       !sm_fpkg_cache_source_matches_remounted_image(&generation))) {
+    errno = ESTALE;
+    return false;
+  }
+  (void)strlcpy(source_path, generation.source_path, MAX_PATH);
+  return true;
+}
 
 static bool resolve_game_source(const sm_game_cache_snapshot_entry_t *source,
                                 game_source_info_t *info) {
@@ -1109,6 +1143,30 @@ static bool copy_regular_file_path(const char *path, char out[MAX_PATH]) {
   return true;
 }
 
+// Scan roots may be removable or otherwise user-controlled. Do not let an
+// artwork lookup follow a title's sce_sys directory or image file symlink out
+// of that source tree.
+static bool copy_source_artwork_path(const char *source, const char *name,
+                                     char out[MAX_PATH]) {
+  if (!source || !source[0] || !name || !name[0])
+    return false;
+  struct stat st;
+  if (lstat(source, &st) != 0 || !S_ISDIR(st.st_mode))
+    return false;
+  char sys_dir[MAX_PATH];
+  int n = snprintf(sys_dir, sizeof(sys_dir), "%s/sce_sys", source);
+  if (n <= 0 || (size_t)n >= sizeof(sys_dir) ||
+      lstat(sys_dir, &st) != 0 || !S_ISDIR(st.st_mode))
+    return false;
+  char candidate[MAX_PATH];
+  n = snprintf(candidate, sizeof(candidate), "%s/%s", sys_dir, name);
+  if (n <= 0 || (size_t)n >= sizeof(candidate) ||
+      lstat(candidate, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0)
+    return false;
+  (void)strlcpy(out, candidate, MAX_PATH);
+  return true;
+}
+
 static bool resolve_game_icon_path(const char *title_id,
                                    const char *recorded_path,
                                    char out[MAX_PATH]) {
@@ -1151,6 +1209,38 @@ static bool resolve_game_icon_path(const char *title_id,
     }
   }
   return false;
+}
+
+// Only resolve fixed artwork names under a tracked title or the platform's
+// installed metadata roots. Image-backed titles use their existing mount; this
+// endpoint never attaches an image as a side effect of browsing the library.
+static bool resolve_game_artwork_path(const char *title_id, const char *source,
+                                      const char *name, char out[MAX_PATH]) {
+  char candidate[MAX_PATH];
+  if (copy_source_artwork_path(source, name, out))
+    return true;
+  static const char *const prefixes[] = {"", "/mnt/ext0", "/mnt/ext0/ps5", "/mnt/ext1", "/mnt/ext1/ps5"};
+  static const char *const roots[] = {APPMETA_BASE, APP_BASE};
+  for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i)
+    for (size_t j = 0; j < sizeof(roots) / sizeof(roots[0]); ++j) {
+      int n = snprintf(candidate, sizeof(candidate), "%s%s/%s/%s%s", prefixes[i], roots[j], title_id,
+                       j == 1 ? "sce_sys/" : "", name);
+      if (n > 0 && (size_t)n < sizeof(candidate) && copy_regular_file_path(candidate, out))
+        return true;
+    }
+  return false;
+}
+
+static bool find_game_snapshot_by_title(const char *, sm_game_cache_snapshot_entry_t *);
+
+static void resolve_game_background_url(const char *title_id, const char *source,
+                                        char *out, size_t size) {
+  char path[MAX_PATH];
+  struct stat st;
+  out[0] = 0;
+  if (resolve_game_artwork_path(title_id, source, "pic1.png", path) && stat(path, &st) == 0)
+    (void)snprintf(out, size, "%s?title_id=%s&v=%016llx", SM_API_ROUTE_GAME_BACKGROUND,
+                   title_id, (unsigned long long)sm_icon_source_fingerprint(path, &st));
 }
 
 static void resolve_game_icon_url(const char *title_id, const char *recorded_path,
@@ -1325,12 +1415,36 @@ static struct json_object *game_to_json(
     return NULL;
   }
 
+  bool fpkg_runtime_source = !installed_pkg &&
+      path_matches_root_or_child(source_info.runtime_path,
+                                 SM_FPKG_CACHE_DEFAULT_ROOT);
+  if (fpkg_runtime_source) {
+    char package_path[MAX_PATH];
+    source_info.source_type = "pkg";
+    source_info.image_type = "";
+    if (resolve_fpkg_storage_source_path(source->title_id,
+                                         source_info.runtime_path,
+                                         package_path))
+      (void)strlcpy(source_info.physical_path, package_path,
+                    sizeof(source_info.physical_path));
+    else
+      source_info.physical_path[0] = '\0';
+  }
+
   char managed_path[MAX_PATH];
   bool installed = installed_pkg || is_installed(source->title_id);
   bool mounted = !installed_pkg && is_data_mounted(source->title_id);
   bool managed = !installed_pkg &&
       read_mount_link(source->title_id, managed_path, sizeof(managed_path));
-  bool source_available = path_exists(source_info.physical_path);
+  bool source_available;
+  if (fpkg_runtime_source) {
+    struct stat source_stat;
+    source_available = lstat(source_info.physical_path, &source_stat) == 0 &&
+                        S_ISREG(source_stat.st_mode) &&
+                        source_stat.st_size > 0;
+  } else {
+    source_available = path_exists(source_info.physical_path);
+  }
   const char *title_name =
       metadata && metadata->title_name[0] != '\0' ? metadata->title_name
                                                   : source->title_name;
@@ -1343,8 +1457,19 @@ static struct json_object *game_to_json(
       sm_config_title_fakelib_mode(cfg, source->title_id);
   bool fakelib_enabled = fakelib_mode != SM_FAKELIB_DISABLED;
   char icon_url[SM_API_ROUTE_SIZE + MAX_TITLE_ID + 32u];
-  resolve_game_icon_url(source->title_id, metadata ? metadata->icon_path : NULL,
-                         library_entry, icon_url, sizeof(icon_url));
+  // Prefer the title's own icon when its folder or image is currently available.
+  char source_icon[MAX_PATH];
+  struct stat icon_st;
+  if (copy_source_artwork_path(source_info.runtime_path, "icon0.png", source_icon) &&
+      lstat(source_icon, &icon_st) == 0)
+    (void)snprintf(icon_url, sizeof(icon_url), "%s?title_id=%s%s&v=%u-%016llx",
+                   SM_API_ROUTE_GAME_ICON, source->title_id, library_entry ? "&size=thumb" : "",
+                   SM_ICON_CACHE_VERSION, (unsigned long long)sm_icon_source_fingerprint(source_icon, &icon_st));
+  else
+    resolve_game_icon_url(source->title_id, metadata ? metadata->icon_path : NULL,
+                          library_entry, icon_url, sizeof(icon_url));
+  char background_url[SM_API_ROUTE_SIZE + MAX_TITLE_ID + 32u];
+  resolve_game_background_url(source->title_id, source_info.runtime_path, background_url, sizeof(background_url));
   char backport_path[MAX_PATH];
   (void)resolve_backport_path_for_title(source->title_id, NULL, backport_path);
 
@@ -1361,12 +1486,15 @@ static struct json_object *game_to_json(
       !add_json_string(item, "last_access_time", last_access_time) ||
       !add_json_string(item, "install_time", install_time) ||
       !add_json_string(item, "icon_url", icon_url) ||
+      !add_json_string(item, "background_url", background_url) ||
       !add_json_int(item, "app_db_size_bytes",
                     metadata ? (int64_t)metadata->installed_size : 0) ||
       !add_json_bool(item, "installed", installed) ||
       !add_json_bool(item, "managed", managed) ||
       !add_json_bool(item, "mounted", mounted) ||
       !add_json_bool(item, "image_backed", source_info.image_backed) ||
+      !add_json_bool(item, "can_unpack", source_info.image_backed &&
+                     !game_uses_fpkg_generation(source->title_id)) ||
       !add_json_bool(item, "source_available", source_available)) {
     json_object_put(item);
     return NULL;
@@ -1984,7 +2112,13 @@ static bool handle_game_icon(struct MHD_Connection *connection) {
   }
 
   char icon_path[MAX_PATH];
-  if (!resolve_game_icon_path(title_id, NULL, icon_path)) {
+  sm_game_cache_snapshot_entry_t icon_entry;
+  bool has_source_icon = false;
+  if (find_game_snapshot_by_title(title_id, &icon_entry)) {
+    has_source_icon = copy_source_artwork_path(icon_entry.path, "icon0.png",
+                                               icon_path);
+  }
+  if (!has_source_icon && !resolve_game_icon_path(title_id, NULL, icon_path)) {
     sm_app_db_game_info_t *metadata = NULL;
     size_t metadata_count = 0;
     if (!app_db_game_info_snapshot(&metadata, &metadata_count)) {
@@ -2000,11 +2134,13 @@ static bool handle_game_icon(struct MHD_Connection *connection) {
                   sizeof(recorded_path));
     free(metadata);
     if (!resolve_game_icon_path(title_id, recorded_path, icon_path)) {
-      return send_error_response(connection, 404, ENOENT,
-                                 "game icon is not available");
+      sm_game_cache_snapshot_entry_t entry;
+      const char *source = find_game_snapshot_by_title(title_id, &entry) ? entry.path : NULL;
+      if (!resolve_game_artwork_path(title_id, source, "icon0.png", icon_path))
+        return send_error_response(connection, 404, ENOENT, "game icon is not available");
     }
   }
-  int fd = open(icon_path, O_RDONLY);
+  int fd = open(icon_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
     int status = errno != 0 ? errno : EIO;
     return send_error_response(connection, operation_http_status(status),
@@ -2037,6 +2173,29 @@ static bool handle_game_icon(struct MHD_Connection *connection) {
   }
   return send_file_response(connection, fd, (uint64_t)st.st_size, content_type,
                             "public, max-age=86400, immutable");
+}
+
+static bool handle_game_background(struct MHD_Connection *connection) {
+  const char *title_id = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "title_id");
+  if (!title_id || !is_supported_game_title_id(title_id))
+    return send_error_response(connection, 400, EINVAL, "invalid title ID");
+  sm_game_cache_snapshot_entry_t entry;
+  const char *source = find_game_snapshot_by_title(title_id, &entry) ? entry.path : NULL;
+  char path[MAX_PATH];
+  if (!resolve_game_artwork_path(title_id, source, "pic1.png", path))
+    return send_error_response(connection, 404, ENOENT, "game background is not available");
+  int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  struct stat st;
+  if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 32 * 1024 * 1024) {
+    if (fd >= 0) close(fd);
+    return send_error_response(connection, 404, ENOENT, "game background is not available");
+  }
+  // Only versioned URLs are immutable: unversioned URLs must be revalidated.
+  const char *version = MHD_lookup_connection_value(connection, MHD_GET_ARGUMENT_KIND, "v");
+  char fingerprint[32];
+  (void)snprintf(fingerprint, sizeof(fingerprint), "%016llx", (unsigned long long)sm_icon_source_fingerprint(path, &st));
+  return send_file_response(connection, fd, (uint64_t)st.st_size, "image/png",
+                            version && strcmp(version, fingerprint) == 0 ? "public, max-age=86400, immutable" : "no-cache");
 }
 
 static bool handle_index_page(struct MHD_Connection *connection) {
@@ -2556,6 +2715,8 @@ static void handle_settings(struct MHD_Connection *connection) {
       !add_json_bool(response, "quiet_mode", cfg.quiet_mode) ||
       !add_json_bool(response, "update_emulators",
                      cfg.update_emulators_enabled) ||
+      !add_json_bool(response, "fpkg_direct_mount",
+                     cfg.fpkg_direct_mount_enabled) ||
       !add_json_string(response, "fakelib_default_mode",
                        sm_config_fakelib_mode_name(cfg.fakelib_default_mode)) ||
       !add_json_bool(response, "auto_update_ampr",
@@ -2582,6 +2743,7 @@ static void handle_settings_update(struct MHD_Connection *connection,
   bool quiet_mode = false;
   bool update_emulators = false;
   bool auto_update_ampr = current_cfg.auto_update_ampr_enabled;
+  bool fpkg_direct_mount = current_cfg.fpkg_direct_mount_enabled;
   bool auto_remove_missing_games = current_cfg.auto_remove_missing_games;
   bool allow_lan_access = false;
   sm_fakelib_mode_t fakelib_default_mode = current_cfg.fakelib_default_mode;
@@ -2595,6 +2757,9 @@ static void handle_settings_update(struct MHD_Connection *connection,
       !get_optional_bool(request, "auto_update_ampr",
                          current_cfg.auto_update_ampr_enabled,
                          &auto_update_ampr) ||
+      !get_optional_bool(request, "fpkg_direct_mount",
+                         current_cfg.fpkg_direct_mount_enabled,
+                         &fpkg_direct_mount) ||
       !get_optional_bool(request, "auto_remove_missing_games",
                          current_cfg.auto_remove_missing_games,
                          &auto_remove_missing_games) ||
@@ -2670,7 +2835,8 @@ static void handle_settings_update(struct MHD_Connection *connection,
   }
   if (!valid || !sm_config_write_web_settings(
                     debug_enabled, quiet_mode, update_emulators,
-                    auto_update_ampr, auto_remove_missing_games,
+                    auto_update_ampr, fpkg_direct_mount,
+                    auto_remove_missing_games,
                     (uint32_t)remove_delay_int,
                     allow_lan_access,
                     (uint32_t)fan_value_int, paths, path_count,
@@ -2811,9 +2977,28 @@ static int resolve_storage_source(const char *title_id,
   if (!resolve_game_source(&entry, source_info))
     return ENOENT;
 
+  // The cache generation is the runtime tree. Storage actions must address
+  // the original package so they cannot copy, move or unlink SMP-owned cache
+  // files. Keep runtime_path as the generation for lifecycle release/launch.
+  bool fpkg_runtime_source = path_matches_root_or_child(
+      source_info->runtime_path, SM_FPKG_CACHE_DEFAULT_ROOT);
+  if (fpkg_runtime_source) {
+    char package_path[MAX_PATH];
+    if (!resolve_fpkg_storage_source_path(
+            title_id, source_info->runtime_path, package_path))
+      return errno != 0 ? errno : ESTALE;
+    (void)strlcpy(source_info->physical_path, package_path,
+                  sizeof(source_info->physical_path));
+    source_info->source_type = "pkg";
+    source_info->image_type = "";
+  }
+
   struct stat st;
-  if (lstat(source_info->physical_path, &st) == 0)
+  if (lstat(source_info->physical_path, &st) == 0) {
+    if (fpkg_runtime_source && (!S_ISREG(st.st_mode) || st.st_size <= 0))
+      return ESTALE;
     return 0;
+  }
   int status = errno != 0 ? errno : EIO;
   if (operation == GAME_STORAGE_DELETE &&
       (status == ENOENT || status == ENOTDIR))
@@ -3352,6 +3537,7 @@ static int count_titles_for_source(const char *physical_path,
 
 static int release_storage_source_runtime(const char *physical_path,
                                           const char *title_id,
+                                          bool detach_image_chain,
                                           size_t *affected_out,
                                           const char **error_out) {
   *affected_out = 0;
@@ -3378,7 +3564,7 @@ static int release_storage_source_runtime(const char *physical_path,
   for (size_t i = 0; i < count; ++i) {
     game_source_info_t info;
     if (!resolve_game_source(&snapshot[i], &info) ||
-        strcmp(info.physical_path, physical_path) != 0) {
+        !game_source_matches_storage_path(&info, physical_path)) {
       continue;
     }
     (*affected_out)++;
@@ -3402,7 +3588,8 @@ static int release_storage_source_runtime(const char *physical_path,
 
   char image_chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
   size_t image_count = 0;
-  if (read_mount_image_chain(title_id, image_chain, &image_count)) {
+  if (detach_image_chain &&
+      read_mount_image_chain(title_id, image_chain, &image_count)) {
     for (size_t layer = image_count; layer > 0; --layer) {
       if (!release_runtime_image_mount(image_chain[layer - 1u])) {
         int status = errno == EBUSY ? EBUSY : EIO;
@@ -3428,10 +3615,41 @@ static int release_browser_source_runtime(const char *path, size_t *affected_out
     game_source_info_t source;
     char canonical[PATH_MAX];
     if (!resolve_game_source(&snapshot[i], &source)) continue;
-    const char *physical = realpath(source.physical_path, canonical) ? canonical : source.physical_path;
-    if (!path_matches_root_or_child(physical, path)) continue;
+    const char *physical = realpath(source.physical_path, canonical)
+                               ? canonical : source.physical_path;
+    const char *runtime_to_release = source.physical_path;
+    bool matched = paths_overlap(physical, path);
+    bool fpkg_generation = path_matches_root_or_child(
+        source.runtime_path, SM_FPKG_CACHE_DEFAULT_ROOT);
+    if (fpkg_generation) {
+      char package_path[MAX_PATH];
+      if (!resolve_fpkg_storage_source_path(
+              snapshot[i].title_id, source.runtime_path, package_path)) {
+        status = errno != 0 ? errno : ESTALE;
+        break;
+      }
+      if (paths_overlap(package_path, path)) {
+        matched = true;
+        runtime_to_release = source.runtime_path;
+      }
+      char image_chain[MAX_IMAGE_CHAIN_DEPTH][MAX_PATH];
+      size_t image_count = 0;
+      if (read_mount_image_chain(snapshot[i].title_id, image_chain,
+                                 &image_count)) {
+        for (size_t layer = 0; layer < image_count; ++layer) {
+          if (paths_overlap(image_chain[layer], path)) {
+            matched = true;
+            runtime_to_release = source.runtime_path;
+            break;
+          }
+        }
+      }
+    }
+    if (!matched) continue;
     size_t affected = 0;
-    status = release_storage_source_runtime(source.physical_path, snapshot[i].title_id, &affected, error_out);
+    status = release_storage_source_runtime(
+        runtime_to_release, snapshot[i].title_id,
+        !is_under_image_mount_base(path), &affected, error_out);
     if (status == ENOENT && affected == 0) status = 0;
     if (status) break;
     ++*affected_out;
@@ -4101,6 +4319,9 @@ static void *storage_job_thread_main(void *arg) {
   } else {
     scanner_mutation = true;
   }
+  if (status == 0 && operation == GAME_STORAGE_UNPACK &&
+      game_uses_fpkg_generation(title_id))
+    status = ENOTSUP;
   if (status == 0 && operation == GAME_STORAGE_UNPACK) {
     const bool read_only = true;
     status = sm_shellcore_mount_title_runtime(title_id, &read_only);
@@ -4175,8 +4396,15 @@ static void *storage_job_thread_main(void *arg) {
   if (status == 0 && operation != GAME_STORAGE_UNPACK && operation != GAME_STORAGE_INSTALL && !backport && !browser_delete) {
     size_t affected = 0;
     recovery_scan_needed = true;
-    status = release_storage_source_runtime(source, title_id, &affected,
-                                             &error);
+    const char *runtime_release_source = source;
+    if (path_matches_root_or_child(runtime_source,
+                                   SM_FPKG_CACHE_DEFAULT_ROOT))
+      runtime_release_source = runtime_source;
+    status = release_storage_source_runtime(runtime_release_source, title_id,
+        !(path_matches_root_or_child(runtime_source,
+                                     SM_FPKG_CACHE_DEFAULT_ROOT) &&
+          is_under_image_mount_base(source)),
+        &affected, &error);
     pthread_mutex_lock(&g_storage_job.mutex);
     if (g_storage_job.id == job_id)
       g_storage_job.affected_titles = affected;
@@ -4192,8 +4420,13 @@ static void *storage_job_thread_main(void *arg) {
     if (g_storage_job.id == job_id)
       g_storage_job.affected_titles = affected;
     pthread_mutex_unlock(&g_storage_job.mutex);
-    if (status == 0 && !path_exists(runtime_source))
-      status = ENOENT;
+    if (status == 0) {
+      struct stat runtime_st;
+      if (stat(runtime_source, &runtime_st) != 0)
+        status = errno != 0 ? errno : EIO;
+      else if (!S_ISDIR(runtime_st.st_mode))
+        status = ENOTSUP;
+    }
   }
 
   if (status == 0) {
@@ -4442,6 +4675,17 @@ static int start_storage_job(const char *title_id,
                                       error_out);
   if (status != 0)
     return status;
+  // An image containing a direct FPKG has a package file as its runtime
+  // source, not an extracted game directory. Copying it as an unpacked title
+  // can otherwise be followed by deletion of the containing image.
+  if (operation == GAME_STORAGE_UNPACK && game_uses_fpkg_generation(title_id))
+    return ENOTSUP;
+  if (path_matches_root_or_child(source_info.runtime_path,
+                                 SM_FPKG_CACHE_DEFAULT_ROOT) &&
+      is_under_image_mount_base(source_info.physical_path) &&
+      operation != GAME_STORAGE_COPY) {
+    return EROFS;
+  }
   if (operation == GAME_STORAGE_UNPACK &&
       (!source_info.image_backed || is_data_mounted(title_id) ||
        sm_shellcore_service_title_is_prepared(title_id))) {
@@ -6046,9 +6290,11 @@ static enum MHD_Result handle_http_request(
     if (strcmp(url, SM_API_ROUTE_INDEX) == 0)
       queued = handle_index_page(connection);
     else if (strcmp(url, SM_API_ROUTE_FAVICON) == 0)
-      queued = send_embedded_response(connection, smp_icon_png,
-                                       (size_t)smp_icon_png_len,
+      queued = send_embedded_response(connection, assets_shadowkraken_logo_png,
+                                       (size_t)assets_shadowkraken_logo_png_len,
                                        "image/png", "public, max-age=86400");
+    else if (strcmp(url, SM_API_ROUTE_GAME_BACKGROUND) == 0)
+      queued = handle_game_background(connection);
     else if (strcmp(url, SM_API_ROUTE_GAME_ICON) == 0)
       queued = handle_game_icon(connection);
     else if (strcmp(url, SM_API_ROUTE_PACKAGE_ICON) == 0)

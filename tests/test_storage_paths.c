@@ -1,9 +1,11 @@
 #include "host_platform.h"
 #include "sm_paths.h"
 
+#ifndef __APPLE__
 struct statfs {
   char f_mntonname[64];
 };
+#endif
 
 static bool storage_mounted = true, stat_failed, statfs_failed;
 static const char *image_source;

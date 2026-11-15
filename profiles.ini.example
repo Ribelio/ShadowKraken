@@ -1,4 +1,4 @@
-# ShadowMountPlus individual settings: /data/shadowmount/profiles.ini
+# ShadowKraken individual settings: /data/shadowmount/profiles.ini
 # Keep [config] version. Uncomment sections and fields to enable overrides.
 # Missing fields or default inherit the corresponding global/built-in setting.
 # Changes apply on the next game launch/mount; active mounts stay unchanged.

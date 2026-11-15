@@ -31,6 +31,8 @@ KERNEL_SYS_STUB_SRCS := $(PS5_SCE_STUBS_DIR)/libkernel_sys.c src/libkernel_sys_e
 
 ASSET_SRCS := src/notify_icon_asset.c src/config_ini_example_asset.c src/web_index_asset.c
 ASSET_SRCS += src/shell_icon_param_asset.c
+ASSET_SRCS += src/web_logo_asset.c
+ASSET_SRCS += src/ampr_emu_ng_runtime_asset.c
 SRCS := src/main.c $(wildcard src/sm_*.c) $(ASSET_SRCS)
 ASM_SRCS := src/sm_shellcore_bridge.S
 OBJS := $(SRCS:.c=.o) $(ASM_SRCS:.S=.o)
@@ -48,10 +50,6 @@ $(JSON_C_LIB): FORCE tools/build_ps5_json_c.py patches/json-c-0.19-release-free.
 	env -u MAKEFLAGS -u MFLAGS python3 tools/build_ps5_json_c.py --prefix "$(JSON_C_PREFIX)" --sdk "$(PS5_PAYLOAD_SDK)"
 
 $(JSON_C_OBJS): $(JSON_C_LIB)
-
-usb-info.elf: tools/usb_info.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lSceNotification
-	$(PS5_PAYLOAD_SDK)/bin/prospero-strip --strip-all $@
 
 # Build Daemon
 shadowmountplus.elf: $(OBJS) $(KERNEL_SYS_STUB_SO) $(JSON_C_LIB)
@@ -71,8 +69,14 @@ src/config_ini_example_asset.c: config.ini.example
 src/web_index_asset.c: web/index.html
 	xxd -i $< > $@
 
+src/web_logo_asset.c: assets/shadowkraken-logo.png
+	xxd -i $< > $@
+
 src/shell_icon_param_asset.c: assets/shell_icon_param.json
 	xxd -i $< > $@
+
+src/ampr_emu_ng_runtime_asset.c: vendor/ampr-emu-ng-v0.4.0/libSceAmpr.sprx
+	xxd -i -n sm_ampr_ng_runtime $< > $@
 
 src/sm_api_service.o src/sm_icon_thumb.o src/sm_gameinfo.o src/sm_pkg.o: CFLAGS += $(HOMEBREW_CFLAGS)
 src/sm_smb.o src/sm_vfs.o: CFLAGS += $(HOMEBREW_CFLAGS)
@@ -93,4 +97,4 @@ src/%.o: src/%.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f shadowmountplus.elf usb-info.elf api-test.elf kill.elf src/*.o $(KERNEL_SYS_STUB_SO) $(ASSET_SRCS)
+	rm -f shadowmountplus.elf src/*.o $(KERNEL_SYS_STUB_SO) $(ASSET_SRCS)
