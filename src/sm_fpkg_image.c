@@ -1,7 +1,11 @@
 /* Virtual inner-image reads through naps_pkg_layout.dat and pfs_image.dat. */
 #include "sm_fpkg_internal.h"
-#include "sm_log.h"
 #include <errno.h>
+#ifdef SM_CHECKED_SYSCALLS
+#include "sm_log.h"
+#else
+#define SM_FPKG_IO_AT() SM_FPKG_IO
+#endif
 #include "sm_fpkg_decoder.h"
 
 #include <stdlib.h>

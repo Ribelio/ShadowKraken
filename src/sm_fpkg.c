@@ -10,8 +10,12 @@
  */
 #include "sm_fpkg.h"
 #include "sm_fpkg_internal.h"
-#include "sm_log.h"
 #include <errno.h>
+#ifdef SM_CHECKED_SYSCALLS
+#include "sm_log.h"
+#else
+#define SM_FPKG_IO_AT() SM_FPKG_IO
+#endif
 
 #include <stdbool.h>
 #include <errno.h>
