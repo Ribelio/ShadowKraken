@@ -1,5 +1,7 @@
 /* Virtual inner-image reads through naps_pkg_layout.dat and pfs_image.dat. */
 #include "sm_fpkg_internal.h"
+#include "sm_log.h"
+#include <errno.h>
 #include "sm_fpkg_decoder.h"
 
 #include <stdlib.h>
@@ -48,7 +50,7 @@ static sm_fpkg_status_t read_stored_image(sm_fpkg_image_reader_t *reader,
     uint64_t absolute = reader->pfs_offset +
                         (uint64_t)outer_block * IMAGE_OUTER_BLOCK + within;
     if (reader->read(reader->read_ctx, absolute, output + done, amount) != 0)
-      return SM_FPKG_IO;
+      return SM_FPKG_IO_AT();
     done += amount;
   }
   return SM_FPKG_OK;

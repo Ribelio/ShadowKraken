@@ -10,6 +10,8 @@
  */
 #include "sm_fpkg.h"
 #include "sm_fpkg_internal.h"
+#include "sm_log.h"
+#include <errno.h>
 
 #include <stdbool.h>
 #include <errno.h>
@@ -100,7 +102,7 @@ static sm_fpkg_status_t validate_cnt_table(sm_pkg_read_fn read, void *ctx,
                                            uint64_t cnt_offset) {
   uint8_t header[SM_FPKG_CNT_HEADER_SIZE];
   if (read(ctx, cnt_offset, header, sizeof(header)) != 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   if (read_be32(header) != 0x7F434E54u)
     return SM_FPKG_CORRUPT;
   uint32_t count = read_be32(header + 0x10u);
@@ -120,7 +122,7 @@ static sm_fpkg_status_t validate_cnt_table(sm_pkg_read_fn read, void *ctx,
     return SM_FPKG_NOMEM;
   if (read(ctx, table_offset, entries, (size_t)table_size) != 0) {
     free(entries);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t status = SM_FPKG_OK;
   for (uint32_t i = 0; i < count; ++i) {
@@ -361,7 +363,7 @@ static sm_fpkg_status_t append_cnt_fallbacks(sm_pkg_read_fn read, void *ctx,
                                               sm_fpkg_tree_t *tree) {
   uint8_t header[SM_FPKG_CNT_HEADER_SIZE];
   if (read(ctx, cnt_offset, header, sizeof(header)) != 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   uint32_t count = read_be32(header + 0x10u);
   uint64_t table_offset = cnt_offset + read_be32(header + 0x18u);
   size_t table_size = (size_t)count * SM_FPKG_CNT_ENTRY_SIZE;
@@ -372,7 +374,7 @@ static sm_fpkg_status_t append_cnt_fallbacks(sm_pkg_read_fn read, void *ctx,
     return SM_FPKG_NOMEM;
   if (read(ctx, table_offset, entries, table_size) != 0) {
     free(entries);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t status = SM_FPKG_OK;
   for (uint32_t i = 0; i < count && status == SM_FPKG_OK; ++i) {
@@ -646,7 +648,7 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
   int result = read(ctx, 0, fih, sizeof(fih));
   if (result != 0) {
     sm_fpkg_close(fpkg);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t early = SM_FPKG_OK;
   if (read_be32(fih) == 0x7F434E54u) early = SM_FPKG_NOT_PS5;
@@ -689,7 +691,7 @@ sm_fpkg_status_t sm_fpkg_open_stream(const char *name, uint64_t size,
   result = read(ctx, superblock_offset, superblock, sizeof(superblock));
   if (result != 0) {
     sm_fpkg_close(fpkg);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (read_le64(superblock) != 2 ||
       read_le64(superblock + 8) != SM_FPKG_SUPERBLOCK_MAGIC) {
@@ -734,7 +736,7 @@ sm_fpkg_status_t sm_fpkg_open_fd(const char *name, int fd,
     return SM_FPKG_UNSUPPORTED;
   struct stat st;
   if (fstat(fd, &st) != 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
       !sm_pkg_source_matches(metadata, &st))
     return SM_FPKG_UNSUPPORTED;

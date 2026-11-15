@@ -45,4 +45,15 @@ void sm_error_mark_notified(void);
 // Notify the user about an image mount failure once per error state.
 void notify_image_mount_failed(const char *path, int mount_err);
 
+
+/* Diagnostic: log where an FPKG I/O status is produced, keeping errno. */
+#define SM_FPKG_IO_AT()                                                       \
+  ({                                                                          \
+    int sm_io_errno_ = errno;                                                 \
+    log_fpkg_trace("io", "%s:%d errno=%d (%s)", __FILE__, __LINE__,          \
+                   sm_io_errno_, strerror(sm_io_errno_));                     \
+    errno = sm_io_errno_;                                                     \
+    SM_FPKG_IO;                                                               \
+  })
+
 #endif

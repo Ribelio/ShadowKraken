@@ -1,5 +1,6 @@
 /* Immutable, no-follow FPKG cache generations. */
 #include "sm_platform.h"
+#include "sm_log.h"
 
 #include <sys/file.h>
 #include <sys/statvfs.h>
@@ -473,7 +474,7 @@ static sm_fpkg_status_t write_all(int fd, const void *data, size_t size) {
     if (count < 0 && errno == EINTR)
       continue;
     if (count <= 0)
-      return SM_FPKG_IO;
+      return SM_FPKG_IO_AT();
     written += (size_t)count;
   }
   return SM_FPKG_OK;
@@ -485,21 +486,21 @@ static sm_fpkg_status_t write_new_file(int root_fd, const char *path,
   int parent_fd = -1;
   char leaf[NAME_MAX + 1];
   if (!relative_parent(root_fd, path, true, &parent_fd, leaf))
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   int fd = openat(parent_fd, leaf,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
                   mode);
   if (fd < 0) {
     close(parent_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t status = write_all(fd, data, size);
   if (status == SM_FPKG_OK && fsync(fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (close(fd) != 0 && status == SM_FPKG_OK)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK && fsync(parent_fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   close(parent_fd);
   return status;
 }
@@ -526,7 +527,7 @@ static sm_fpkg_status_t read_owned_file(int directory_fd, const char *name,
   struct stat st;
   if (fstat(fd, &st) != 0) {
     close(fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (!S_ISREG(st.st_mode) || st.st_uid != geteuid() || st.st_nlink != 1 ||
       (st.st_mode & 0022) != 0 || st.st_size < 0 ||
@@ -551,7 +552,7 @@ static sm_fpkg_status_t read_owned_file(int directory_fd, const char *name,
       close(fd);
       free(contents);
       errno = saved;
-      return SM_FPKG_IO;
+      return SM_FPKG_IO_AT();
     }
     done += (size_t)count;
   }
@@ -559,7 +560,7 @@ static sm_fpkg_status_t read_owned_file(int directory_fd, const char *name,
     int saved = errno;
     free(contents);
     errno = saved;
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (memchr(contents, '\0', size) != NULL) {
     free(contents);
@@ -778,7 +779,7 @@ static sm_fpkg_status_t read_generation_identity(
   struct stat directory_stat;
   if (fstat(generation_fd, &directory_stat) != 0) {
     close(generation_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (!S_ISDIR(directory_stat.st_mode) || directory_stat.st_uid != geteuid() ||
       (directory_stat.st_mode & 0022) != 0) {
@@ -1631,7 +1632,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   int root_fd = open_directory_path(root, false);
   if (root_fd < 0) {
     writable_path_out[0] = '\0';
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   int title_fd = -1, lock_fd = -1, writable_fd = -1, generation_fd = -1;
   int source_fd = -1;
@@ -1640,7 +1641,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   char *pointer = NULL, *built = NULL;
   char *copy_buffer = NULL;
   size_t pointer_size = 0, built_size = 0;
-  sm_fpkg_status_t status = SM_FPKG_IO;
+  sm_fpkg_status_t status = SM_FPKG_IO_AT();
   if (!safe_cache_directory_fd(root_fd)) {
     status = SM_FPKG_CORRUPT;
     goto done_writable;
@@ -1671,7 +1672,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   int pointer_stat_result = fstatat(title_fd, ".writable-active", &before_pointer,
                                     AT_SYMLINK_NOFOLLOW);
   if (pointer_stat_result != 0 && errno != ENOENT) {
-    status = SM_FPKG_IO; goto done_writable;
+    status = SM_FPKG_IO_AT(); goto done_writable;
   }
   status = read_owned_file(title_fd, ".writable-active", 512u,
                            &pointer, &pointer_size);
@@ -1749,7 +1750,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   (void)snprintf(temporary, sizeof(temporary), ".active-%s", upper);
   length = snprintf(writable_path_out, MAX_PATH, "%s/%s/%s", root, title_id, upper);
   if (length < 0 || length >= MAX_PATH) { status = SM_FPKG_UNSUPPORTED; goto done_writable; }
-  if (mkdirat(title_fd, stage, 0700) != 0) { status = SM_FPKG_IO; goto done_writable; }
+  if (mkdirat(title_fd, stage, 0700) != 0) { status = SM_FPKG_IO_AT(); goto done_writable; }
   writable_fd = openat(title_fd, stage, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (source_fd >= 0) {
     copy_buffer = malloc(65536u);
@@ -1762,12 +1763,12 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
        !fingerprint_writable_tree(source_fd, "", 0, &after) ||
        before.xor_hash != after.xor_hash || before.sum_hash != after.sum_hash ||
        before.count != after.count)) || fsync(writable_fd) != 0) {
-    status = SM_FPKG_IO; goto done_writable;
+    status = SM_FPKG_IO_AT(); goto done_writable;
   }
   status = write_new_file(title_fd, meta, built, built_size, 0600);
   if (status != SM_FPKG_OK) goto done_writable;
   if (rename_noreplace(title_fd, stage, title_fd, upper) != 0 || fsync(title_fd) != 0) {
-    status = SM_FPKG_IO; goto done_writable;
+    status = SM_FPKG_IO_AT(); goto done_writable;
   }
   length = snprintf(contents, sizeof(contents),
                     "SM-FPKG-WRITABLE-1\ngeneration=%s\nupper=%s\n",
@@ -1788,7 +1789,7 @@ sm_fpkg_status_t sm_fpkg_cache_prepare_writable(
   }
   int renamed = had_pointer ? renameat(title_fd, temporary, title_fd, ".writable-active")
                             : rename_noreplace(title_fd, temporary, title_fd, ".writable-active");
-  if (renamed != 0 || fsync(title_fd) != 0) { status = SM_FPKG_IO; goto done_writable; }
+  if (renamed != 0 || fsync(title_fd) != 0) { status = SM_FPKG_IO_AT(); goto done_writable; }
   status = SM_FPKG_OK;
 done_writable:
   free(pointer);
@@ -1941,12 +1942,12 @@ sm_fpkg_status_t sm_fpkg_cache_recover_title(
     int iterator_fd = openat(title_fd, ".",
                              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (iterator_fd < 0) {
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     } else {
       DIR *directory = fdopendir(iterator_fd);
       if (!directory) {
         close(iterator_fd);
-        status = SM_FPKG_IO;
+        status = SM_FPKG_IO_AT();
       } else {
         struct dirent *entry;
         while ((entry = readdir(directory)) != NULL) {
@@ -2100,7 +2101,7 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
 
   int root_fd = open_directory_path(normalized_root, false);
   if (root_fd < 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   if (!safe_cache_directory_fd(root_fd)) {
     close(root_fd);
     return SM_FPKG_CORRUPT;
@@ -2109,7 +2110,7 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (title_fd < 0) {
     close(root_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (!safe_cache_directory_fd(title_fd)) {
     close(title_fd);
@@ -2120,7 +2121,7 @@ sm_fpkg_status_t sm_fpkg_cache_read_generation_info(
   if (lock_fd < 0) {
     close(title_fd);
     close(root_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
 
   int generation_fd = -1;
@@ -2217,7 +2218,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   if (!begin_cleanup(title_id, generation_path, ctx))
     return SM_FPKG_CANCELLED;
 
-  sm_fpkg_status_t status = SM_FPKG_IO;
+  sm_fpkg_status_t status = SM_FPKG_IO_AT();
   int root_fd = open_directory_path(normalized_root, false);
   int title_fd = -1, lock_fd = -1, generation_fd = -1;
   owned_cache_manifest_t manifest = {0};
@@ -2279,7 +2280,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   }
   if (rename_noreplace(title_fd, generation_name, title_fd,
                        quarantine_name) != 0 || fsync(title_fd) != 0) {
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
     goto cleanup;
   }
 
@@ -2289,7 +2290,7 @@ sm_fpkg_status_t sm_fpkg_cache_remove_generation(
   if (!remove_validated_owned_tree(generation_fd, "", 0u, &manifest) ||
       unlinkat(title_fd, quarantine_name, AT_REMOVEDIR) != 0 ||
       fsync(title_fd) != 0) {
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
     goto cleanup;
   }
   status = SM_FPKG_OK;
@@ -2324,7 +2325,7 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
 
   struct stat existing;
   if (fstatat(directory_fd, ".journal", &existing, AT_SYMLINK_NOFOLLOW) != 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   if (!S_ISREG(existing.st_mode) || existing.st_uid != geteuid() ||
       existing.st_nlink != 1 || (existing.st_mode & 0022) != 0) {
     errno = EPERM;
@@ -2341,17 +2342,17 @@ static sm_fpkg_status_t replace_journal_state(int directory_fd,
   int fd = openat(directory_fd, temporary,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   sm_fpkg_status_t status = write_all(fd, contents, (size_t)length);
   if (status == SM_FPKG_OK && fsync(fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (close(fd) != 0 && status == SM_FPKG_OK)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK && renameat(directory_fd, temporary,
                                        directory_fd, ".journal") != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK && fsync(directory_fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status != SM_FPKG_OK)
     (void)unlinkat(directory_fd, temporary, 0);
   return status;
@@ -2442,22 +2443,22 @@ static sm_fpkg_status_t write_active_generation(
   int fd = openat(title_fd, temporary,
                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   sm_fpkg_status_t status = write_all(fd, contents, (size_t)length);
   if (status == SM_FPKG_OK && fsync(fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (close(fd) != 0 && status == SM_FPKG_OK)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK) {
     int rename_result = had_active
                             ? renameat(title_fd, temporary, title_fd, "active")
                             : rename_noreplace(title_fd, temporary, title_fd,
                                                "active");
     if (rename_result != 0)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
   }
   if (status == SM_FPKG_OK && fsync(title_fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status != SM_FPKG_OK)
     (void)unlinkat(title_fd, temporary, 0);
   return status;
@@ -2480,7 +2481,7 @@ static sm_fpkg_status_t cache_begin(void *opaque,
   if (!relative_parent(sink->directory_fd, file->path, true, &parent_fd,
                        leaf)) {
     free(context);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   context->fd = openat(parent_fd, leaf,
                        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
@@ -2488,7 +2489,7 @@ static sm_fpkg_status_t cache_begin(void *opaque,
   if (context->fd < 0) {
     close(parent_fd);
     free(context);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   if (fsync(parent_fd) != 0) {
     int saved = errno;
@@ -2496,7 +2497,7 @@ static sm_fpkg_status_t cache_begin(void *opaque,
     close(parent_fd);
     free(context);
     errno = saved;
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   close(parent_fd);
   context->expected_size = file->size;
@@ -2526,11 +2527,11 @@ static sm_fpkg_status_t cache_finish(void *opaque, bool commit) {
   if (commit && file->written != file->expected_size)
     status = SM_FPKG_CORRUPT;
   if (commit && status == SM_FPKG_OK && fchmod(file->fd, file->mode) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (commit && status == SM_FPKG_OK && fsync(file->fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (close(file->fd) != 0 && status == SM_FPKG_OK)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (commit && status == SM_FPKG_OK) {
     if (file->written > UINT64_MAX - file->sink->total_written)
       status = SM_FPKG_UNSUPPORTED;
@@ -2552,7 +2553,7 @@ static sm_fpkg_status_t stage_backport_files(
   for (size_t i = 0; i < count && status == SM_FPKG_OK; ++i) {
     if (is_cancelled(sink->options)) { status = SM_FPKG_CANCELLED; break; }
     int source = sm_fpkg_backport_open_file(backport, i);
-    if (source < 0) { status = SM_FPKG_IO; break; }
+    if (source < 0) { status = SM_FPKG_IO_AT(); break; }
     sm_fpkg_file_t file = {.path = files[i].path, .size = files[i].size};
     void *context = NULL;
     status = cache_begin(sink, &file, &context);
@@ -2562,12 +2563,12 @@ static sm_fpkg_status_t stage_backport_files(
                          ? (size_t)(file.size - offset) : 65536u;
       ssize_t got = read(source, buffer, chunk);
       if (got < 0 && errno == EINTR) continue;
-      if (got <= 0) { status = SM_FPKG_IO; break; }
+      if (got <= 0) { status = SM_FPKG_IO_AT(); break; }
       status = cache_write(context, offset, buffer, (size_t)got);
       offset += (uint64_t)got;
     }
     if (close(source) != 0 && status == SM_FPKG_OK)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     if (context) {
       sm_fpkg_status_t finish = cache_finish(context, status == SM_FPKG_OK);
       if (status == SM_FPKG_OK) status = finish;
@@ -2646,7 +2647,7 @@ static sm_fpkg_status_t write_cache_artifacts(
     return SM_FPKG_UNSUPPORTED;
   status = write_new_file(stage_fd, ".done", done, (size_t)done_length, 0600);
   if (status == SM_FPKG_OK && fsync(stage_fd) != 0)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   return status;
 }
 
@@ -2685,7 +2686,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
     return SM_FPKG_UNSUPPORTED;
   struct stat fd_stat;
   if (fstat(source_fd, &fd_stat) != 0 || !S_ISREG(fd_stat.st_mode))
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   int reader_fd = sm_fpkg_source_fd(fpkg);
   struct stat reader_stat;
   if (reader_fd < 0 || fstat(reader_fd, &reader_stat) != 0 ||
@@ -2699,7 +2700,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
 
   int root_fd = open_directory_path(normalized_cache_root, true);
   if (root_fd < 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   struct stat root_stat;
   if (fstat(root_fd, &root_stat) != 0 || !S_ISDIR(root_stat.st_mode) ||
       root_stat.st_uid != geteuid() || (root_stat.st_mode & 0022) != 0) {
@@ -2713,13 +2714,13 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
   (void)title_created;
   if (title_fd < 0) {
     close(root_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   int lock_fd = open_title_lock(title_fd, true);
   if (lock_fd < 0) {
     close(title_fd);
     close(root_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
 
   sm_fpkg_backport_t *backport = NULL;
@@ -2846,7 +2847,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
     required_space += index.size + manifest.size +
                       SM_FPKG_CACHE_RESERVE_BYTES;
   if (status == SM_FPKG_OK && !checked_free_space(title_fd, required_space))
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK && is_cancelled(options))
     status = SM_FPKG_CANCELLED;
 
@@ -2865,14 +2866,14 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
      * active pointer is committed, its contents are only an unreachable stage.
      */
     if (mkdirat(title_fd, generation_name, 0700) != 0)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     else if (fsync(title_fd) != 0)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     else {
       stage_fd = openat(title_fd, generation_name,
                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
       if (stage_fd < 0)
-        status = SM_FPKG_IO;
+        status = SM_FPKG_IO_AT();
     }
   }
   if (status == SM_FPKG_OK) {
@@ -2886,7 +2887,7 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
                                               &created);
     (void)created;
     if (kraken_dir < 0)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     else
       close(kraken_dir);
   }
@@ -2954,14 +2955,14 @@ sm_fpkg_status_t sm_fpkg_cache_build_generation(
     if (status == SM_FPKG_OK)
       status = replace_journal_state(stage_fd, "verified");
     if (status == SM_FPKG_OK && fsync(title_fd) != 0)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     if (status == SM_FPKG_OK &&
         replace_journal_state(stage_fd, "published") != SM_FPKG_OK)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     if (status == SM_FPKG_OK &&
         write_active_generation(title_fd, generation_name,
                                 had_active_generation) != SM_FPKG_OK)
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
     if (status == SM_FPKG_OK)
       (void)strlcpy(generation_path_out, expected_generation_path, MAX_PATH);
   } else if (stage_fd >= 0) {

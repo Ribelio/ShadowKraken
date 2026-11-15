@@ -1,5 +1,6 @@
 /* Stable, no-follow snapshot of files used to build an FPKG backport. */
 #include "sm_platform.h"
+#include "sm_log.h"
 #include "sm_fpkg_backport.h"
 #include "sm_limits.h"
 #include <strings.h>
@@ -86,14 +87,14 @@ static sm_fpkg_status_t walk_dir(sm_fpkg_backport_t *snapshot, int dir_fd,
     return SM_FPKG_UNSUPPORTED;
   struct stat before, after;
   if (fstat(dir_fd, &before) != 0 || !S_ISDIR(before.st_mode))
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   int iterator_fd = openat(dir_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (iterator_fd < 0)
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   DIR *dir = fdopendir(iterator_fd);
   if (!dir) {
     close(iterator_fd);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t status = SM_FPKG_OK;
   for (;;) {
@@ -101,7 +102,7 @@ static sm_fpkg_status_t walk_dir(sm_fpkg_backport_t *snapshot, int dir_fd,
     struct dirent *entry = readdir(dir);
     if (!entry) {
       if (errno)
-        status = SM_FPKG_IO;
+        status = SM_FPKG_IO_AT();
       break;
     }
     if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
@@ -123,7 +124,7 @@ static sm_fpkg_status_t walk_dir(sm_fpkg_backport_t *snapshot, int dir_fd,
     }
     struct stat st;
     if (fstatat(dir_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-      status = SM_FPKG_IO;
+      status = SM_FPKG_IO_AT();
       break;
     }
     if (S_ISDIR(st.st_mode)) {
@@ -132,7 +133,7 @@ static sm_fpkg_status_t walk_dir(sm_fpkg_backport_t *snapshot, int dir_fd,
       struct stat opened;
       if (child < 0 || fstat(child, &opened) != 0 || !same_stat(&st, &opened)) {
         if (child >= 0) close(child);
-        status = SM_FPKG_IO;
+        status = SM_FPKG_IO_AT();
         break;
       }
       status = walk_dir(snapshot, child, path, depth + 1u);
@@ -146,10 +147,10 @@ static sm_fpkg_status_t walk_dir(sm_fpkg_backport_t *snapshot, int dir_fd,
       break;
   }
   if (closedir(dir) != 0 && status == SM_FPKG_OK)
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   if (status == SM_FPKG_OK &&
       (fstat(dir_fd, &after) != 0 || !same_stat(&before, &after)))
-    status = SM_FPKG_IO;
+    status = SM_FPKG_IO_AT();
   return status;
 }
 
@@ -178,13 +179,13 @@ sm_fpkg_status_t sm_fpkg_backport_open(const char *path,
   char canonical[MAX_PATH];
   if (!realpath(path, canonical)) {
     sm_fpkg_backport_close(snapshot);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   snapshot->root = strdup(canonical);
   snapshot->root_fd = open(canonical, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (!snapshot->root || snapshot->root_fd < 0) {
     sm_fpkg_backport_close(snapshot);
-    return SM_FPKG_IO;
+    return SM_FPKG_IO_AT();
   }
   sm_fpkg_status_t status = walk_dir(snapshot, snapshot->root_fd, "", 0);
   if (status == SM_FPKG_OK && snapshot->count > 1) {
